@@ -1,4 +1,4 @@
-++ -- MySQL DDL for user core/profile/presence and simple id sequence for account numbers
+ -- MySQL DDL for user core/profile/presence and simple id sequence for account numbers
 -- Schema: user_core, user_profile, user_presence, account_sequence
 
 -- 1) account_sequence: simple table to provide auto-increment numbers for account_no generation
