@@ -1,26 +1,24 @@
 package com.ming.imchatserver.dao;
 
+import lombok.Data;
+
 import java.util.Date;
 
+/**
+ * 用户核心信息实体（映射 user_core 表）。
+ */
+@Data
 public class UserCoreDO {
+    /** 用户 ID（主键）。 */
     private Long userId;
+    /** 对外账号编号。 */
     private String accountNo;
+    /** 用户名（登录标识）。 */
     private String username;
+    /** 密码哈希。 */
     private String passwordHash;
+    /** 创建时间。 */
     private Date createdAt;
+    /** 更新时间。 */
     private Date updatedAt;
-
-    // getters and setters
-    public Long getUserId() { return userId; }
-    public void setUserId(Long userId) { this.userId = userId; }
-    public String getAccountNo() { return accountNo; }
-    public void setAccountNo(String accountNo) { this.accountNo = accountNo; }
-    public String getUsername() { return username; }
-    public void setUsername(String username) { this.username = username; }
-    public String getPasswordHash() { return passwordHash; }
-    public void setPasswordHash(String passwordHash) { this.passwordHash = passwordHash; }
-    public Date getCreatedAt() { return createdAt; }
-    public void setCreatedAt(Date createdAt) { this.createdAt = createdAt; }
-    public Date getUpdatedAt() { return updatedAt; }
-    public void setUpdatedAt(Date updatedAt) { this.updatedAt = updatedAt; }
 }

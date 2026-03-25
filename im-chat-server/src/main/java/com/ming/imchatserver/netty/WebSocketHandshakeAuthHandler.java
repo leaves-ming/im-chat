@@ -23,15 +23,26 @@ import java.util.Map;
 import java.util.Optional;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
+/**
+ * WebSocket 握手阶段鉴权 Handler。
+ * <p>
+ * 在协议升级前校验来源与 token，校验通过后将用户信息写入 Channel Attribute，
+ * 供后续业务 Handler 使用。
+ */
 
-public class WebSocketHandshakeAuthHandler extends ChannelInboundHandlerAdapter {
+    public class WebSocketHandshakeAuthHandler extends ChannelInboundHandlerAdapter {
 
     private static final Logger logger = LoggerFactory.getLogger(WebSocketHandshakeAuthHandler.class);
     private final NettyProperties properties;
     private final AuthService authService;
     private final ChannelUserManager channelUserManager;
     private final ObjectMapper mapper = new ObjectMapper();
-
+    /**
+     * @param properties          Netty 配置（ws 路径、origin 白名单等）
+     * @param authService         token 验证与解析服务
+     * @param channelUserManager  连接绑定管理器（当前类保留依赖用于后续扩展）
+     */
+    
     public WebSocketHandshakeAuthHandler(NettyProperties properties, AuthService authService, ChannelUserManager channelUserManager) {
         this.properties = properties;
         this.authService = authService;
@@ -39,6 +50,12 @@ public class WebSocketHandshakeAuthHandler extends ChannelInboundHandlerAdapter 
     }
 
     @Override
+    /**
+     * 拦截 HTTP 握手请求并执行鉴权。
+     * <p>
+     * 仅当路径命中 websocketPath 时生效；鉴权失败直接返回 HTTP 错误并关闭连接。
+     */
+    
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         if (msg instanceof FullHttpRequest req) {
             String uri = req.uri();
@@ -90,8 +107,19 @@ public class WebSocketHandshakeAuthHandler extends ChannelInboundHandlerAdapter 
                     return;
                 }
                 AuthService.AuthUser u = user.get();
-                // set attr for downstream handlers
+                // set attr for downstream handlers - do NOT bind here. BIND must happen after handshake complete.
                 ctx.channel().attr(NettyAttr.USER_ID).set(u.userId);
+                ctx.channel().attr(NettyAttr.AUTH_OK).set(Boolean.TRUE);
+
+                // If token came via query (e.g., /ws?token=xxx) we must normalize URI so WebSocketServerProtocolHandler can match path.
+                // Remove query part from request URI.
+                try {
+                    URI cleaned = new URI(parsed.getPath());
+                    // use reflection-friendly method: setUri on FullHttpRequest
+                    req.setUri(cleaned.toString());
+                } catch (Exception ex) {
+                    // ignore - not critical
+                }
                 // log with proxied IP headers if present
                 String remoteIp = req.headers().get("X-Real-IP");
                 if (remoteIp == null) {
@@ -106,6 +134,14 @@ public class WebSocketHandshakeAuthHandler extends ChannelInboundHandlerAdapter 
         super.channelRead(ctx, msg);
     }
 
+    /**
+     * 返回错误响应并关闭连接。
+     *
+     * @param ctx    channel 上下文
+     * @param status HTTP 状态码
+     * @param code   业务错误码
+     * @param msg    错误信息
+     */
     private void writeErrorAndClose(ChannelHandlerContext ctx, HttpResponseStatus status, int code, String msg) {
         try {
             Map<String,Object> m = new HashMap<>();
@@ -122,4 +158,3 @@ public class WebSocketHandshakeAuthHandler extends ChannelInboundHandlerAdapter 
         }
     }
 }
-

@@ -1,97 +1,45 @@
 package com.ming.imchatserver.config;
 
+import lombok.Getter;
+import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Netty 运行参数配置。
+ * <p>
+ * 对应配置前缀：{@code im.netty}。
+ */
 @Component
 @ConfigurationProperties(prefix = "im.netty")
+@Getter
+@Setter
 public class NettyProperties {
+    /** Netty 监听端口。 */
     private int port = 8080;
+    /** WebSocket 路径。 */
     private String websocketPath = "/ws";
+    /** 读空闲阈值（秒）。 */
     private int readerIdleSeconds = 60;
+    /** 写空闲阈值（秒）。 */
     private int writerIdleSeconds = 0;
+    /** 总空闲阈值（秒）。 */
     private int allIdleSeconds = 120;
+    /** HTTP 聚合器最大内容长度。 */
     private int maxContentLength = 65536;
-
-    // JWT token ttl (seconds)
+    /** JWT token 过期时间（秒）。 */
     private long tokenExpireSeconds = 3600;
 
-    // Origin whitelist
+    /** 是否开启 Origin 白名单校验。 */
     private boolean originCheckEnabled = false;
+    /** 允许的 Origin 列表。 */
     private List<String> originWhitelist = new ArrayList<>();
 
-    public int getPort() {
-        return port;
-    }
-
-    public void setPort(int port) {
-        this.port = port;
-    }
-
-    public String getWebsocketPath() {
-        return websocketPath;
-    }
-
-    public void setWebsocketPath(String websocketPath) {
-        this.websocketPath = websocketPath;
-    }
-
-    public int getReaderIdleSeconds() {
-        return readerIdleSeconds;
-    }
-
-    public void setReaderIdleSeconds(int readerIdleSeconds) {
-        this.readerIdleSeconds = readerIdleSeconds;
-    }
-
-    public int getWriterIdleSeconds() {
-        return writerIdleSeconds;
-    }
-
-    public void setWriterIdleSeconds(int writerIdleSeconds) {
-        this.writerIdleSeconds = writerIdleSeconds;
-    }
-
-    public int getAllIdleSeconds() {
-        return allIdleSeconds;
-    }
-
-    public void setAllIdleSeconds(int allIdleSeconds) {
-        this.allIdleSeconds = allIdleSeconds;
-    }
-
-    public int getMaxContentLength() {
-        return maxContentLength;
-    }
-
-    public void setMaxContentLength(int maxContentLength) {
-        this.maxContentLength = maxContentLength;
-    }
-
-    public long getTokenExpireSeconds() {
-        return tokenExpireSeconds;
-    }
-
-    public void setTokenExpireSeconds(long tokenExpireSeconds) {
-        this.tokenExpireSeconds = tokenExpireSeconds;
-    }
-
-    public boolean isOriginCheckEnabled() {
-        return originCheckEnabled;
-    }
-
-    public void setOriginCheckEnabled(boolean originCheckEnabled) {
-        this.originCheckEnabled = originCheckEnabled;
-    }
-
-    public List<String> getOriginWhitelist() {
-        return originWhitelist;
-    }
-
-    public void setOriginWhitelist(List<String> originWhitelist) {
-        this.originWhitelist = originWhitelist;
-    }
+    /** 同步批大小（用于重连后自动同步）。 */
+    private int syncBatchSize = 50;
+    /** 离线拉取单次最大条数。 */
+    private int offlinePullMaxLimit = 200;
 }

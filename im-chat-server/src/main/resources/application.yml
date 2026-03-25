@@ -71,8 +71,8 @@ im:
     all-idle-seconds: 120
     max-content-length: 65536
     token-expire-seconds: 3600
+    offline-pull-max-limit: 200
     origin-check-enabled: false
     origin-whitelist:
       - http://localhost:5173
       - http://127.0.0.1:5173
-

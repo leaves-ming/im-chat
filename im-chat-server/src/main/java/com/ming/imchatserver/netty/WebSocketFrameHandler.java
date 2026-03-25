@@ -2,8 +2,12 @@ package com.ming.imchatserver.netty;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import io.netty.channel.ChannelFutureListener;
+import com.ming.imchatserver.config.NettyProperties;
+import com.ming.imchatserver.dao.MessageDO;
+import com.ming.imchatserver.event.MessagePersistedEvent;
+import com.ming.imchatserver.service.MessageService;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
@@ -14,28 +18,63 @@ import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 
-import java.util.Collection;
-import java.util.UUID;
+import java.time.Instant;
+import java.util.Date;
+import java.util.List;
+/**
+ * WebSocket 业务主处理器。
+ * <p>
+ * 职责：
+ * - 处理握手完成后的用户绑定与重连同步；
+ * - 处理文本业务指令（CHAT / ACK_REPORT / PULL_OFFLINE）；
+ * - 处理心跳帧与连接关闭事件；
+ * - 将发送消息的“落库”和“推送”通过事件机制解耦。
+ */
 
-public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocketFrame> {
+    public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocketFrame> {
 
     private static final Logger logger = LoggerFactory.getLogger(WebSocketFrameHandler.class);
+    private static final int DEFAULT_PULL_MAX_LIMIT = 200;
 
     private final ChannelUserManager channelUserManager;
     private final ObjectMapper mapper = new ObjectMapper();
-
-    public WebSocketFrameHandler(ChannelUserManager channelUserManager) {
+    private final MessageService messageService;
+    private final NettyProperties nettyProperties;
+    private final ApplicationEventPublisher eventPublisher;
+    /**
+     * @param channelUserManager 在线连接管理器
+     * @param messageService     消息服务（落库、状态更新、分页拉取）
+     * @param nettyProperties    Netty 运行参数
+     * @param eventPublisher     事件发布器（用于消息推送解耦）
+     */
+    
+    public WebSocketFrameHandler(ChannelUserManager channelUserManager,
+                                 MessageService messageService,
+                                 NettyProperties nettyProperties,
+                                 ApplicationEventPublisher eventPublisher) {
         this.channelUserManager = channelUserManager;
+        this.messageService = messageService;
+        this.nettyProperties = nettyProperties;
+        this.eventPublisher = eventPublisher;
     }
 
     @Override
+    /**
+     * Handler 被加入 pipeline 时触发，仅用于日志观测。
+     */
+    
     public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
         logger.info("handlerAdded: {}", ctx.channel());
         super.handlerAdded(ctx);
     }
 
     @Override
+    /**
+     * Handler 移除时做用户解绑，防止连接映射泄漏。
+     */
+    
     public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
         Long userId = ctx.channel().attr(NettyAttr.USER_ID).get();
         if (userId != null) {
@@ -46,82 +85,350 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
     }
 
     @Override
+    /**
+     * 连接激活事件（此处不做绑定，等待握手鉴权完成后再绑定）。
+     */
+    
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
-        // 当 channel 激活时，尝试绑定 userId（如果已在 attr 中设置）
-        Long userId = ctx.channel().attr(NettyAttr.USER_ID).get();
-        if (userId != null) {
-            channelUserManager.bindUser(ctx.channel(), userId);
-            logger.info("channel active and bound user {}", userId);
-        }
+        logger.debug("channel active: {} (waiting handshake)", ctx.channel());
         super.channelActive(ctx);
     }
 
     @Override
-    protected void channelRead0(ChannelHandlerContext ctx, WebSocketFrame frame) throws Exception {
-        Channel ch = ctx.channel();
-        if (frame instanceof TextWebSocketFrame text) {
-            String textMsg = text.text();
-            Long fromUserId = ctx.channel().attr(NettyAttr.USER_ID).get();
-            logger.debug("recv text from userId={} channel={} msg={}", fromUserId, ch.id(), textMsg);
-            // 简单回显逻辑：如果消息是 JSON 且包含 targetUserId，尝试投递；否则回显
-            try {
-                JsonNode node = mapper.readTree(textMsg);
-                if (node != null && node.has("type") && "CHAT".equals(node.get("type").asText())) {
-                    long target = node.path("targetUserId").asLong(0L);
-                    String content = node.path("content").asText("");
-                    String clientMsgId = node.path("clientMsgId").asText("");
-                    // delivery payload
-                    ObjectNode deliver = mapper.createObjectNode();
-                    deliver.put("type", "CHAT_DELIVER");
-                    deliver.put("fromUserId", fromUserId == null ? 0L : fromUserId);
-                    deliver.put("content", content);
-                    deliver.put("clientMsgId", clientMsgId);
-                    String serverMsgId = UUID.randomUUID().toString();
-                    deliver.put("serverMsgId", serverMsgId);
-
-                    Collection<io.netty.channel.Channel> targets = channelUserManager.getChannels(target);
-                    if (targets.isEmpty()) {
-                        // 目标不在线，告知发送者状态
-                        ObjectNode ack = mapper.createObjectNode();
-                        ack.put("type", "DELIVER_ACK");
-                        ack.put("clientMsgId", clientMsgId);
-                        ack.put("serverMsgId", serverMsgId);
-                        ack.put("status", "TARGET_OFFLINE");
-                        ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(ack)));
-                        logger.info("deliver failed - target offline: from={} to={} clientMsgId={} serverMsgId={}", fromUserId, target, clientMsgId, serverMsgId);
-                    } else {
-                        for (io.netty.channel.Channel c : targets) {
-                            c.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(deliver)));
-                        }
-                        ObjectNode ack = mapper.createObjectNode();
-                        ack.put("type", "DELIVER_ACK");
-                        ack.put("clientMsgId", clientMsgId);
-                        ack.put("serverMsgId", serverMsgId);
-                        ack.put("status", "DELIVERED");
-                        ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(ack)));
-                        logger.info("deliver success: from={} to={} clientMsgId={} serverMsgId={} channelsSent={}", fromUserId, target, clientMsgId, serverMsgId, targets.size());
-                    }
+    /**
+     * 处理用户事件，主要监听 WebSocket 握手完成事件并触发重连同步。
+     */
+    
+    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+        if (evt instanceof io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler.HandshakeComplete) {
+            Long userId = ctx.channel().attr(NettyAttr.USER_ID).get();
+            Boolean auth = ctx.channel().attr(NettyAttr.AUTH_OK).get();
+            if (Boolean.TRUE.equals(auth) && userId != null) {
+                Boolean bound = ctx.channel().attr(NettyAttr.BOUND).get();
+                if (!Boolean.TRUE.equals(bound)) {
+                    channelUserManager.bindUser(ctx.channel(), userId);
+                    ctx.channel().attr(NettyAttr.BOUND).set(Boolean.TRUE);
+                    logger.info("handshake complete and bound user {} to channel {}", userId, ctx.channel().id());
+                    triggerSyncAfterHandshake(ctx, userId);
                 } else {
-                    // 非 CHAT 类型，回显原文
-                    ch.writeAndFlush(new TextWebSocketFrame(textMsg));
+                    logger.debug("handshake complete but channel already bound (ignored): user={} channel={}", userId, ctx.channel().id());
                 }
-            } catch (Exception ex) {
-                logger.error("process text frame error", ex);
-                ch.writeAndFlush(new TextWebSocketFrame("error"));
+            } else {
+                logger.warn("handshake complete but no auth info found on channel {}, closing", ctx.channel().id());
+                ctx.close();
             }
-        } else if (frame instanceof PingWebSocketFrame) {
-            ctx.writeAndFlush(new PongWebSocketFrame(frame.content().retain()));
-        } else if (frame instanceof PongWebSocketFrame) {
-            // 忽略
-        } else if (frame instanceof CloseWebSocketFrame) {
-            ctx.close();
-        } else {
-            // 其它帧类型暂不支持
-            logger.warn("unsupported frame: {}", frame.getClass().getName());
+            return;
         }
+        super.userEventTriggered(ctx, evt);
     }
 
     @Override
+    /**
+     * WebSocket 帧入口：
+     * - Text: 交给业务命令分发
+     * - Ping: 回 Pong
+     * - Pong: 忽略
+     * - Close: 关闭连接
+     */
+    
+    protected void channelRead0(ChannelHandlerContext ctx, WebSocketFrame frame) throws Exception {
+        Channel ch = ctx.channel();
+        if (frame instanceof TextWebSocketFrame text) {
+            processTextFrame(ch, text.text());
+            return;
+        }
+        if (frame instanceof PingWebSocketFrame) {
+            ctx.writeAndFlush(new PongWebSocketFrame(frame.content().retain()));
+            return;
+        }
+        if (frame instanceof PongWebSocketFrame) {
+            return;
+        }
+        if (frame instanceof CloseWebSocketFrame) {
+            ctx.close();
+            return;
+        }
+        logger.warn("unsupported frame: {}", frame.getClass().getName());
+    }
+    /**
+     * 分发文本业务命令到对应处理函数。
+     */
+    private void processTextFrame(Channel ch, String textMsg) {
+        Long fromUserId = ch.attr(NettyAttr.USER_ID).get();
+        logger.debug("recv text from userId={} channel={} msg={}", fromUserId, ch.id(), textMsg);
+        try {
+            JsonNode node = mapper.readTree(textMsg);
+            if (node == null || !node.has("type")) {
+                sendError(ch, "INVALID_PARAM", "missing type field");
+                return;
+            }
+            String type = node.path("type").asText();
+            switch (type) {
+                case "CHAT" -> handleChat(ch, fromUserId, node);
+                case "DELIVER_ACK_REPORT", "READ_ACK_REPORT", "ACK_REPORT" -> handleAckReport(ch, node, type);
+                case "PULL_OFFLINE" -> handlePullOffline(ch, fromUserId, node);
+                default -> sendError(ch, "UNSUPPORTED_CMD", "unsupported command: " + type);
+            }
+        } catch (Exception ex) {
+            logger.error("process text frame error", ex);
+            sendError(ch, "INTERNAL_ERROR", "internal error");
+        }
+    }
+
+    /**
+     * 处理聊天发送请求。
+     * <p>
+     * 先做参数校验与落库，再根据幂等结果决定是否发布推送事件：
+     * - 新消息：发布 MessagePersistedEvent
+     * - 幂等重放：仅回发送端 ACK，不重复推送
+     */
+    private void handleChat(Channel ch, Long fromUserId, JsonNode node) {
+        if (fromUserId == null) {
+            sendError(ch, "UNAUTHORIZED", "user not bound");
+            return;
+        }
+        long target = node.path("targetUserId").asLong(0L);
+        if (target <= 0) {
+            sendError(ch, "INVALID_PARAM", "targetUserId must be greater than 0");
+            return;
+        }
+        String content = node.path("content").asText("");
+        if (content == null || content.trim().isEmpty()) {
+            sendError(ch, "INVALID_PARAM", "content must not be blank");
+            return;
+        }
+        String normalizedClientMsgId = normalizeClientMsgId(node.path("clientMsgId").asText(null));
+
+        MessageDO msg = new MessageDO();
+        msg.setClientMsgId(normalizedClientMsgId);
+        msg.setFromUserId(fromUserId);
+        msg.setToUserId(target);
+        msg.setContent(content);
+        msg.setStatus("SENT");
+
+        MessageService.PersistResult persistResult = messageService.persistMessage(msg);
+        String serverMsgId = persistResult.getServerMsgId();
+
+        // Idempotent replay should not trigger a new push event.
+        if (!persistResult.isCreatedNew()) {
+            sendDeliverAck(ch, normalizedClientMsgId, serverMsgId, null);
+            return;
+        }
+
+        eventPublisher.publishEvent(new MessagePersistedEvent(
+                this,
+                ch,
+                fromUserId,
+                target,
+                normalizedClientMsgId,
+                serverMsgId,
+                content
+        ));
+    }
+
+    /**
+     * 处理接收端上报的送达/已读 ACK，并通知发送端消息状态变化。
+     */
+    private void handleAckReport(Channel ch, JsonNode node, String reportType) throws Exception {
+        String serverMsgId = node.path("serverMsgId").asText(null);
+        if (serverMsgId == null || serverMsgId.isBlank()) {
+            sendError(ch, "INVALID_PARAM", "serverMsgId required");
+            return;
+        }
+        String targetStatus = ("READ_ACK_REPORT".equals(reportType) || "ACK_REPORT".equals(reportType)) ? "ACKED" : "DELIVERED";
+        int updated = messageService.updateStatusByServerMsgId(serverMsgId, targetStatus);
+
+        ObjectNode resp = mapper.createObjectNode();
+        resp.put("type", "ACK_REPORT_RESULT");
+        resp.put("serverMsgId", serverMsgId);
+        resp.put("status", targetStatus);
+        resp.put("updated", updated);
+        ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(resp)));
+        if (updated > 0) {
+            MessageDO m = messageService.findByServerMsgId(serverMsgId);
+            if (m != null) {
+                ObjectNode notify = mapper.createObjectNode();
+                notify.put("type", "MSG_STATUS_NOTIFY");
+                notify.put("serverMsgId", serverMsgId);
+                notify.put("status", targetStatus);
+                notify.put("toUserId", m.getToUserId());
+                String payload = mapper.writeValueAsString(notify);
+                for (Channel c : channelUserManager.getChannels(m.getFromUserId())) {
+                    c.writeAndFlush(new TextWebSocketFrame(payload));
+                }
+            }
+        }
+    }
+
+    /**
+     * 处理离线消息拉取请求（支持首屏 recent 和游标增量拉取）。
+     */
+    private void handlePullOffline(Channel ch, Long fromUserId, JsonNode node) throws Exception {
+        if (fromUserId == null) {
+            sendError(ch, "UNAUTHORIZED", "user not bound");
+            return;
+        }
+
+        int limit = node.has("limit") ? node.get("limit").asInt(nettyProperties.getSyncBatchSize()) : nettyProperties.getSyncBatchSize();
+        int maxLimit = nettyProperties.getOfflinePullMaxLimit() > 0 ? nettyProperties.getOfflinePullMaxLimit() : DEFAULT_PULL_MAX_LIMIT;
+        if (limit < 1 || limit > maxLimit) {
+            sendError(ch, "INVALID_PARAM", "limit must be between 1 and " + maxLimit);
+            return;
+        }
+
+        String cursorCreatedAtStr = node.has("cursorCreatedAt") && !node.get("cursorCreatedAt").isNull() ? node.get("cursorCreatedAt").asText() : null;
+        Long cursorId = node.has("cursorId") && !node.get("cursorId").isNull() ? node.get("cursorId").asLong() : null;
+
+        boolean hasCursorCreatedAt = cursorCreatedAtStr != null && !cursorCreatedAtStr.isBlank();
+        boolean hasCursorId = cursorId != null;
+        if (hasCursorCreatedAt != hasCursorId) {
+            sendError(ch, "INVALID_PARAM", "cursorCreatedAt and cursorId must be provided together");
+            return;
+        }
+
+        Date cursorCreatedAt = null;
+        if (hasCursorCreatedAt) {
+            try {
+                cursorCreatedAt = Date.from(Instant.parse(cursorCreatedAtStr));
+            } catch (Exception ex) {
+                sendError(ch, "INVALID_PARAM", "cursorCreatedAt must be ISO-8601 instant");
+                return;
+            }
+        }
+
+        MessageService.CursorPageResult pageResult = !hasCursorCreatedAt
+                ? messageService.pullRecent(fromUserId, limit)
+                : messageService.pullOfflineByCursor(fromUserId, cursorCreatedAt, cursorId, limit);
+        List<MessageDO> retList = pageResult.getMessages();
+
+        ObjectNode resp = mapper.createObjectNode();
+        resp.put("type", "PULL_OFFLINE_RESULT");
+        resp.put("hasMore", pageResult.isHasMore());
+        if (pageResult.getNextCursorCreatedAt() != null && pageResult.getNextCursorId() != null) {
+            resp.put("nextCursorCreatedAt", formatAsInstant(pageResult.getNextCursorCreatedAt()));
+            resp.put("nextCursorId", pageResult.getNextCursorId());
+        }
+
+        ArrayNode arr = mapper.createArrayNode();
+        for (MessageDO m : retList) {
+            ObjectNode item = mapper.createObjectNode();
+            item.put("serverMsgId", m.getServerMsgId());
+            item.put("clientMsgId", m.getClientMsgId());
+            item.put("fromUserId", m.getFromUserId());
+            item.put("toUserId", m.getToUserId());
+            item.put("content", m.getContent());
+            item.put("status", m.getStatus());
+            item.put("createdAt", formatAsInstant(m.getCreatedAt()));
+            arr.add(item);
+        }
+        resp.set("messages", arr);
+        ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(resp)));
+    }
+
+    /**
+     * 规范化 clientMsgId：空白字符串转 null，统一幂等键语义。
+     */
+    private String normalizeClientMsgId(String clientMsgId) {
+        if (clientMsgId == null) {
+            return null;
+        }
+        String trimmed = clientMsgId.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /**
+     * 将 Date 序列化为 ISO-8601 字符串（UTC instant）。
+     */
+    private String formatAsInstant(Date date) {
+        if (date == null) {
+            return null;
+        }
+        return date.toInstant().toString();
+    }
+
+    /**
+     * 发送统一错误响应帧。
+     */
+    private void sendError(Channel ch, String code, String msg) {
+        try {
+            ObjectNode err = mapper.createObjectNode();
+            err.put("type", "ERROR");
+            err.put("code", code);
+            err.put("msg", msg);
+            ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(err)));
+        } catch (Exception ex) {
+            logger.error("sendError failed", ex);
+            ch.writeAndFlush(new TextWebSocketFrame("{\"type\":\"ERROR\",\"code\":\"INTERNAL_ERROR\",\"msg\":\"internal error\"}"));
+        }
+    }
+
+    /**
+     * 发送发送端投递确认（DELIVER_ACK）。
+     */
+    private void sendDeliverAck(Channel ch, String clientMsgId, String serverMsgId, String info) {
+        try {
+            ObjectNode ack = mapper.createObjectNode();
+            ack.put("type", "DELIVER_ACK");
+            if (clientMsgId != null) {
+                ack.put("clientMsgId", clientMsgId);
+            } else {
+                ack.putNull("clientMsgId");
+            }
+            ack.put("serverMsgId", serverMsgId);
+            ack.put("status", "SENT");
+            if (info != null) {
+                ack.put("info", info);
+            }
+            ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(ack)));
+        } catch (Exception ex) {
+            logger.error("sendDeliverAck failed", ex);
+        }
+    }
+
+    /**
+     * 握手成功后的最小同步策略：
+     * - 先发 SYNC_START
+     * - 再发一批 SYNC_BATCH（最近消息）
+     * - 最后发 SYNC_END + hasMore
+     */
+    private void triggerSyncAfterHandshake(ChannelHandlerContext ctx, Long userId) throws Exception {
+        ObjectNode start = mapper.createObjectNode();
+        start.put("type", "SYNC_START");
+        start.put("userId", userId);
+        ctx.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(start)));
+
+        int batch = nettyProperties.getSyncBatchSize();
+        MessageService.CursorPageResult pageResult = messageService.pullRecent(userId, batch);
+        List<MessageDO> list = pageResult.getMessages();
+
+        ObjectNode batchNode = mapper.createObjectNode();
+        batchNode.put("type", "SYNC_BATCH");
+        ArrayNode arr = mapper.createArrayNode();
+        for (MessageDO m : list) {
+            ObjectNode mi = mapper.createObjectNode();
+            mi.put("serverMsgId", m.getServerMsgId());
+            mi.put("clientMsgId", m.getClientMsgId());
+            mi.put("fromUserId", m.getFromUserId());
+            mi.put("toUserId", m.getToUserId());
+            mi.put("content", m.getContent());
+            mi.put("status", m.getStatus());
+            mi.put("createdAt", formatAsInstant(m.getCreatedAt()));
+            arr.add(mi);
+        }
+        batchNode.set("messages", arr);
+        ctx.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(batchNode)));
+
+        ObjectNode end = mapper.createObjectNode();
+        end.put("type", "SYNC_END");
+        end.put("hasMore", pageResult.isHasMore());
+        ctx.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(end)));
+    }
+
+    @Override
+    /**
+     * 业务处理异常兜底：记录日志、解绑并关闭连接。
+     */
+    
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
         logger.error("websocket handler exception", cause);
         Long userId = ctx.channel().attr(NettyAttr.USER_ID).get();
@@ -131,6 +438,10 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
     }
 
     @Override
+    /**
+     * 连接断开时清理用户绑定关系。
+     */
+    
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         Long userId = ctx.channel().attr(NettyAttr.USER_ID).get();
         logger.info("channel inactive {} userId={}", ctx.channel().id(), userId);
@@ -138,4 +449,3 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
         super.channelInactive(ctx);
     }
 }
-

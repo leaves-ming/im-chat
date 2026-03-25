@@ -14,8 +14,13 @@ import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import org.springframework.context.ApplicationEventPublisher;
 import java.net.InetSocketAddress;
-
+/**
+ * Netty WebSocket 服务启动器。
+ * <p>
+ * 在 Spring 容器启动完成后初始化 Netty 服务端，并在容器关闭时优雅释放资源。
+ */
 @Component
 public class NettyWebSocketServer {
 
@@ -24,19 +29,38 @@ public class NettyWebSocketServer {
     private final NettyProperties properties;
     private final AuthService authService;
     private final ChannelUserManager channelUserManager;
+    private final com.ming.imchatserver.service.MessageService messageService;
+    private final ApplicationEventPublisher eventPublisher;
 
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
     private Channel serverChannel;
 
     @Autowired
-    public NettyWebSocketServer(NettyProperties properties, AuthService authService, ChannelUserManager channelUserManager) {
+    /**
+     * @param properties          Netty 相关配置
+     * @param authService         认证服务（用于握手阶段）
+     * @param channelUserManager  在线连接管理
+     * @param messageService      消息服务
+     * @param eventPublisher      事件发布器（用于业务事件解耦）
+     */
+    
+    public NettyWebSocketServer(NettyProperties properties,
+                                AuthService authService,
+                                ChannelUserManager channelUserManager,
+                                com.ming.imchatserver.service.MessageService messageService,
+                                ApplicationEventPublisher eventPublisher) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
+        this.messageService = messageService;
+        this.eventPublisher = eventPublisher;
     }
 
-    @EventListener(ApplicationReadyEvent.class)
+    @EventListener(ApplicationReadyEvent.class)    /**
+     * Spring 应用就绪后启动 Netty 监听。
+     */
+    
     public void start() throws InterruptedException {
         // sanity check: Spring embedded server should be disabled (server.port=0 or web-application-type=none)
         logger.info("Starting Netty server (configured port={})", properties.getPort());
@@ -46,12 +70,15 @@ public class NettyWebSocketServer {
         b.group(bossGroup, workerGroup)
                 .channel(NioServerSocketChannel.class)
                 .localAddress(new InetSocketAddress(properties.getPort()))
-                .childHandler(new NettyServerInitializer(properties, authService, channelUserManager));
+                .childHandler(new NettyServerInitializer(properties, authService, channelUserManager, messageService, eventPublisher));
         serverChannel = b.bind().sync().channel();
         logger.info("Netty server started and listening on {}", properties.getPort());
     }
 
-    @EventListener(ContextClosedEvent.class)
+    @EventListener(ContextClosedEvent.class)    /**
+     * Spring 容器关闭时停止 Netty 服务并释放线程池。
+     */
+    
     public void shutdown() {
         logger.info("shutting down netty server...");
         try {
@@ -65,4 +92,3 @@ public class NettyWebSocketServer {
         }
     }
 }
-

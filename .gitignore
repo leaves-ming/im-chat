@@ -3,6 +3,8 @@ target/
 !**/src/main/**/target/
 !**/src/test/**/target/
 .kotlin
+/docs
+im_roadmap.md
 
 ### IntelliJ IDEA ###
 .idea/modules.xml
