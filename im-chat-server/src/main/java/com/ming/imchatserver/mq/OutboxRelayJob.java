@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ming.imchatserver.config.ReliabilityProperties;
 import com.ming.imchatserver.dao.OutboxMessageDO;
 import com.ming.imchatserver.mapper.OutboxMapper;
+import com.ming.imchatserver.metrics.MetricsService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -23,14 +24,17 @@ public class OutboxRelayJob {
     private final OutboxMapper outboxMapper;
     private final DispatchProducer dispatchProducer;
     private final ReliabilityProperties reliabilityProperties;
+    private final MetricsService metricsService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public OutboxRelayJob(OutboxMapper outboxMapper,
                           DispatchProducer dispatchProducer,
-                          ReliabilityProperties reliabilityProperties) {
+                          ReliabilityProperties reliabilityProperties,
+                          MetricsService metricsService) {
         this.outboxMapper = outboxMapper;
         this.dispatchProducer = dispatchProducer;
         this.reliabilityProperties = reliabilityProperties;
+        this.metricsService = metricsService;
     }
 
     @Scheduled(fixedDelayString = "${im.reliability.relay-fixed-delay-ms:1000}")
@@ -41,6 +45,7 @@ public class OutboxRelayJob {
         }
 
         for (OutboxMessageDO outbox : batch) {
+            metricsService.incrementRelaySend();
             try {
                 DispatchMessagePayload payload = objectMapper.readValue(outbox.getPayload(), DispatchMessagePayload.class);
                 dispatchProducer.sendSingleDispatch(payload);
@@ -53,6 +58,7 @@ public class OutboxRelayJob {
     }
 
     private void handleRetry(OutboxMessageDO outbox, Exception ex) {
+        metricsService.incrementRelayFail();
         int nextRetryCount = (outbox.getRetryCount() == null ? 0 : outbox.getRetryCount()) + 1;
         boolean toDlq = nextRetryCount >= reliabilityProperties.getMaxRetryCount();
         int nextStatus = toDlq ? 3 : 2;

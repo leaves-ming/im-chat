@@ -63,4 +63,11 @@ public interface OutboxMapper {
                        @Param("retryCount") int retryCount,
                        @Param("nextRetryAt") Date nextRetryAt,
                        @Param("failReason") String failReason);
+
+    @Select("""
+            SELECT COUNT(1)
+            FROM im_message_outbox
+            WHERE status IN (0, 2)
+            """)
+    long countBacklog();
 }

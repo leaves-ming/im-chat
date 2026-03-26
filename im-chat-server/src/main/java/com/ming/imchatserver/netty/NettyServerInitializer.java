@@ -2,6 +2,7 @@ package com.ming.imchatserver.netty;
 
 import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.mapper.DeliveryMapper;
+import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.service.AuthService;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
@@ -21,6 +22,7 @@ import io.netty.handler.timeout.IdleStateHandler;
     private final ChannelUserManager channelUserManager;
     private final com.ming.imchatserver.service.MessageService messageService;
     private final DeliveryMapper deliveryMapper;
+    private final MetricsService metricsService;
     /**
      * 创建 Channel 初始化器，并注入各业务 Handler 所需依赖。
      */
@@ -29,12 +31,14 @@ import io.netty.handler.timeout.IdleStateHandler;
                                   AuthService authService,
                                   ChannelUserManager channelUserManager,
                                   com.ming.imchatserver.service.MessageService messageService,
-                                  DeliveryMapper deliveryMapper) {
+                                  DeliveryMapper deliveryMapper,
+                                  MetricsService metricsService) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
         this.messageService = messageService;
         this.deliveryMapper = deliveryMapper;
+        this.metricsService = metricsService;
     }
 
     @Override
@@ -54,14 +58,14 @@ import io.netty.handler.timeout.IdleStateHandler;
         ch.pipeline().addLast(new ChunkedWriteHandler());
 
         // 先处理 REST 请求（如 /api/auth/login），非 REST 请求交由后续处理
-        ch.pipeline().addLast(new HttpRequestHandler(properties, authService));
+        ch.pipeline().addLast(new HttpRequestHandler(properties, authService, metricsService));
 
         // 握手认证必须在 WebSocketServerProtocolHandler 之前完成
         ch.pipeline().addLast(new WebSocketHandshakeAuthHandler(properties, authService, channelUserManager));
         ch.pipeline().addLast(new WebSocketServerProtocolHandler(properties.getWebsocketPath(), null, true, properties.getMaxContentLength()));
         // 业务帧鉴权（要求 channel 已绑定 userId）
         ch.pipeline().addLast(new WsBusinessAuthHandler(channelUserManager));
-        ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, messageService, properties, deliveryMapper));
+        ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, messageService, properties, deliveryMapper, metricsService));
         ch.pipeline().addLast(new IdleEventHandler(channelUserManager));
     }
 }

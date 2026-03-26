@@ -81,3 +81,6 @@ im:
     relay-fixed-delay-ms: 1000
     max-retry-count: 8
     dispatch-topic: im.msg.dispatch
+  metrics:
+    sample-fixed-delay-ms: 10000
+    log-fixed-delay-ms: 60000

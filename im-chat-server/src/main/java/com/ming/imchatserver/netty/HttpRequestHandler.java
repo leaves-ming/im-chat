@@ -3,6 +3,7 @@ package com.ming.imchatserver.netty;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ming.imchatserver.config.NettyProperties;
+import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.service.AuthService;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFutureListener;
@@ -34,6 +35,7 @@ import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
     private static final Logger logger = LoggerFactory.getLogger(HttpRequestHandler.class);
     private final NettyProperties properties;
     private final AuthService authService;
+    private final MetricsService metricsService;
     private final ObjectMapper mapper = new ObjectMapper();
     /**
      * 创建 HTTP 处理器。
@@ -42,9 +44,17 @@ import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
      * @param authService 认证服务，用于执行用户名密码登录
      */
     
-    public HttpRequestHandler(NettyProperties properties, AuthService authService) {
+    public HttpRequestHandler(NettyProperties properties, AuthService authService, MetricsService metricsService) {
         this.properties = properties;
         this.authService = authService;
+        this.metricsService = metricsService;
+    }
+
+    /**
+     * 单元测试兼容构造函数。
+     */
+    public HttpRequestHandler(NettyProperties properties, AuthService authService) {
+        this(properties, authService, null);
     }
 
     @Override
@@ -57,6 +67,18 @@ import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
     
     protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest req) throws Exception {
         String uri = req.uri();
+        if (HttpMethod.GET.equals(req.method()) && uri.startsWith("/internal/metrics")) {
+            if (metricsService == null) {
+                writeJson(ctx, "{\"code\":1,\"msg\":\"metrics service unavailable\"}", HttpResponseStatus.SERVICE_UNAVAILABLE);
+                return;
+            }
+            ObjectNode resp = mapper.createObjectNode();
+            resp.put("code", 0);
+            resp.put("msg", "ok");
+            resp.set("data", mapper.valueToTree(metricsService.snapshot().asMap()));
+            writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.OK);
+            return;
+        }
         if (HttpMethod.POST.equals(req.method()) && uri.startsWith("/api/auth/login")) {
             String body = req.content().toString(StandardCharsets.UTF_8);
             try {

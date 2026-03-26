@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.mapper.DeliveryMapper;
+import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.service.MessageService;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
@@ -42,6 +43,7 @@ import java.util.List;
     private final MessageService messageService;
     private final NettyProperties nettyProperties;
     private final DeliveryMapper deliveryMapper;
+    private final MetricsService metricsService;
     /**
      * @param channelUserManager 在线连接管理器
      * @param messageService     消息服务（落库、状态更新、分页拉取）
@@ -52,11 +54,23 @@ import java.util.List;
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
                                  MessageService messageService,
                                  NettyProperties nettyProperties,
-                                 DeliveryMapper deliveryMapper) {
+                                 DeliveryMapper deliveryMapper,
+                                 MetricsService metricsService) {
         this.channelUserManager = channelUserManager;
         this.messageService = messageService;
         this.nettyProperties = nettyProperties;
         this.deliveryMapper = deliveryMapper;
+        this.metricsService = metricsService;
+    }
+
+    /**
+     * 单元测试兼容构造函数。
+     */
+    public WebSocketFrameHandler(ChannelUserManager channelUserManager,
+                                 MessageService messageService,
+                                 NettyProperties nettyProperties,
+                                 DeliveryMapper deliveryMapper) {
+        this(channelUserManager, messageService, nettyProperties, deliveryMapper, null);
     }
 
     @Override
@@ -234,8 +248,10 @@ import java.util.List;
                 Date now = new Date();
                 if ("READ".equals(targetStatus)) {
                     deliveryMapper.upsertAck(m.getId(), reporterUserId, now, now);
+                    recordAckLatency(targetStatus, m.getCreatedAt(), now);
                 } else {
                     deliveryMapper.upsertAck(m.getId(), reporterUserId, now, null);
+                    recordAckLatency(targetStatus, m.getCreatedAt(), now);
                 }
                 ObjectNode notify = mapper.createObjectNode();
                 notify.put("type", "MSG_STATUS_NOTIFY");
@@ -248,6 +264,13 @@ import java.util.List;
                 }
             }
         }
+    }
+
+    private void recordAckLatency(String ackType, Date createdAt, Date ackAt) {
+        if (metricsService == null || createdAt == null || ackAt == null) {
+            return;
+        }
+        metricsService.observeAckLatency(ackType, createdAt.getTime(), ackAt.getTime());
     }
 
     /**
