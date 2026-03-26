@@ -2,13 +2,20 @@ package com.ming.imchatserver.service.impl;
 
 import com.github.pagehelper.Page;
 import com.github.pagehelper.PageHelper;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ming.imchatserver.config.ReliabilityProperties;
 import com.ming.imchatserver.dao.MessageDO;
+import com.ming.imchatserver.dao.OutboxMessageDO;
 import com.ming.imchatserver.mapper.MessageMapper;
+import com.ming.imchatserver.mapper.OutboxMapper;
+import com.ming.imchatserver.mq.DispatchMessagePayload;
 import com.ming.imchatserver.service.MessageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -25,14 +32,37 @@ import java.util.UUID;
 public class MessageServiceImpl implements MessageService {
 
     private static final Logger logger = LoggerFactory.getLogger(MessageServiceImpl.class);
-
+    private static final int OUTBOX_STATUS_NEW = 0;
+    private static final String DEFAULT_DISPATCH_TOPIC = "im.msg.dispatch";
     private final MessageMapper messageMapper;
+    private final OutboxMapper outboxMapper;
+    private final ReliabilityProperties reliabilityProperties;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
      * @param messageMapper 消息表数据访问对象
      */
-    public MessageServiceImpl(MessageMapper messageMapper) {
+    @Autowired
+    public MessageServiceImpl(MessageMapper messageMapper,
+                              OutboxMapper outboxMapper,
+                              ReliabilityProperties reliabilityProperties) {
         this.messageMapper = messageMapper;
+        this.outboxMapper = outboxMapper;
+        this.reliabilityProperties = reliabilityProperties;
+    }
+
+    /**
+     * 单元测试兼容构造函数。
+     */
+    public MessageServiceImpl(MessageMapper messageMapper) {
+        this(messageMapper, null, null);
+    }
+
+    /**
+     * 单元测试兼容构造函数（含 outbox）。
+     */
+    public MessageServiceImpl(MessageMapper messageMapper, OutboxMapper outboxMapper) {
+        this(messageMapper, outboxMapper, null);
     }
 
     /**
@@ -42,6 +72,7 @@ public class MessageServiceImpl implements MessageService {
      * 用于客户端重试幂等。
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public PersistResult persistMessage(MessageDO msg) {
         msg.setClientMsgId(normalizeClientMsgId(msg.getClientMsgId()));
 
@@ -51,6 +82,7 @@ public class MessageServiceImpl implements MessageService {
 
         try {
             messageMapper.insert(msg);
+            appendOutbox(msg);
             logger.info("persistMessage: inserted new message serverMsgId={} from={} to={}", serverMsgId, msg.getFromUserId(), msg.getToUserId());
             return new PersistResult(serverMsgId, true);
         } catch (DuplicateKeyException ex) {
@@ -63,6 +95,40 @@ public class MessageServiceImpl implements MessageService {
                 }
             }
             throw ex;
+        }
+    }
+
+    /**
+     * 在消息事务内写 outbox，保证“落库成功 => 最终可分发”。
+     */
+    private void appendOutbox(MessageDO msg) {
+        if (outboxMapper == null) {
+            return;
+        }
+        try {
+            DispatchMessagePayload payload = new DispatchMessagePayload();
+            payload.setEventId(UUID.randomUUID().toString());
+            payload.setServerMsgId(msg.getServerMsgId());
+            payload.setClientMsgId(msg.getClientMsgId());
+            payload.setFromUserId(msg.getFromUserId());
+            payload.setToUserId(msg.getToUserId());
+            payload.setContent(msg.getContent());
+            payload.setMsgType("TEXT");
+
+            OutboxMessageDO outbox = new OutboxMessageDO();
+            outbox.setEventId(payload.getEventId());
+            outbox.setMessageId(msg.getId());
+            String dispatchTopic = reliabilityProperties == null ? DEFAULT_DISPATCH_TOPIC : reliabilityProperties.getDispatchTopic();
+            outbox.setTopic(dispatchTopic);
+            outbox.setTag("SINGLE");
+            outbox.setPayload(objectMapper.writeValueAsString(payload));
+            outbox.setStatus(OUTBOX_STATUS_NEW);
+            outbox.setRetryCount(0);
+            outbox.setNextRetryAt(new Date());
+
+            outboxMapper.insert(outbox);
+        } catch (Exception ex) {
+            throw new IllegalStateException("appendOutbox failed serverMsgId=" + msg.getServerMsgId(), ex);
         }
     }
 

@@ -6,7 +6,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.dao.MessageDO;
-import com.ming.imchatserver.event.MessagePersistedEvent;
+import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.service.MessageService;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
@@ -18,7 +18,6 @@ import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Instant;
 import java.util.Date;
@@ -42,22 +41,22 @@ import java.util.List;
     private final ObjectMapper mapper = new ObjectMapper();
     private final MessageService messageService;
     private final NettyProperties nettyProperties;
-    private final ApplicationEventPublisher eventPublisher;
+    private final DeliveryMapper deliveryMapper;
     /**
      * @param channelUserManager 在线连接管理器
      * @param messageService     消息服务（落库、状态更新、分页拉取）
      * @param nettyProperties    Netty 运行参数
-     * @param eventPublisher     事件发布器（用于消息推送解耦）
+     * @param deliveryMapper     投递状态落库组件
      */
     
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
                                  MessageService messageService,
                                  NettyProperties nettyProperties,
-                                 ApplicationEventPublisher eventPublisher) {
+                                 DeliveryMapper deliveryMapper) {
         this.channelUserManager = channelUserManager;
         this.messageService = messageService;
         this.nettyProperties = nettyProperties;
-        this.eventPublisher = eventPublisher;
+        this.deliveryMapper = deliveryMapper;
     }
 
     @Override
@@ -178,9 +177,8 @@ import java.util.List;
     /**
      * 处理聊天发送请求。
      * <p>
-     * 先做参数校验与落库，再根据幂等结果决定是否发布推送事件：
-     * - 新消息：发布 MessagePersistedEvent
-     * - 幂等重放：仅回发送端 ACK，不重复推送
+     * 先做参数校验与“消息+outbox”事务落库，再直接回发 SERVER_ACK。
+     * MQ relay 后续异步分发，不阻塞 Netty I/O 链路。
      */
     private void handleChat(Channel ch, Long fromUserId, JsonNode node) {
         if (fromUserId == null) {
@@ -208,34 +206,20 @@ import java.util.List;
 
         MessageService.PersistResult persistResult = messageService.persistMessage(msg);
         String serverMsgId = persistResult.getServerMsgId();
-
-        // Idempotent replay should not trigger a new push event.
-        if (!persistResult.isCreatedNew()) {
-            sendDeliverAck(ch, normalizedClientMsgId, serverMsgId, null);
-            return;
-        }
-
-        eventPublisher.publishEvent(new MessagePersistedEvent(
-                this,
-                ch,
-                fromUserId,
-                target,
-                normalizedClientMsgId,
-                serverMsgId,
-                content
-        ));
+        sendServerAck(ch, normalizedClientMsgId, serverMsgId, persistResult.isCreatedNew());
     }
 
     /**
      * 处理接收端上报的送达/已读 ACK，并通知发送端消息状态变化。
      */
     private void handleAckReport(Channel ch, JsonNode node, String reportType) throws Exception {
+        Long reporterUserId = ch.attr(NettyAttr.USER_ID).get();
         String serverMsgId = node.path("serverMsgId").asText(null);
         if (serverMsgId == null || serverMsgId.isBlank()) {
             sendError(ch, "INVALID_PARAM", "serverMsgId required");
             return;
         }
-        String targetStatus = ("READ_ACK_REPORT".equals(reportType) || "ACK_REPORT".equals(reportType)) ? "ACKED" : "DELIVERED";
+        String targetStatus = ("READ_ACK_REPORT".equals(reportType) || "ACK_REPORT".equals(reportType)) ? "READ" : "DELIVERED";
         int updated = messageService.updateStatusByServerMsgId(serverMsgId, targetStatus);
 
         ObjectNode resp = mapper.createObjectNode();
@@ -247,6 +231,12 @@ import java.util.List;
         if (updated > 0) {
             MessageDO m = messageService.findByServerMsgId(serverMsgId);
             if (m != null) {
+                Date now = new Date();
+                if ("READ".equals(targetStatus)) {
+                    deliveryMapper.upsertAck(m.getId(), reporterUserId, now, now);
+                } else {
+                    deliveryMapper.upsertAck(m.getId(), reporterUserId, now, null);
+                }
                 ObjectNode notify = mapper.createObjectNode();
                 notify.put("type", "MSG_STATUS_NOTIFY");
                 notify.put("serverMsgId", serverMsgId);
@@ -365,23 +355,21 @@ import java.util.List;
     /**
      * 发送发送端投递确认（DELIVER_ACK）。
      */
-    private void sendDeliverAck(Channel ch, String clientMsgId, String serverMsgId, String info) {
+    private void sendServerAck(Channel ch, String clientMsgId, String serverMsgId, boolean createdNew) {
         try {
             ObjectNode ack = mapper.createObjectNode();
-            ack.put("type", "DELIVER_ACK");
+            ack.put("type", "SERVER_ACK");
             if (clientMsgId != null) {
                 ack.put("clientMsgId", clientMsgId);
             } else {
                 ack.putNull("clientMsgId");
             }
             ack.put("serverMsgId", serverMsgId);
-            ack.put("status", "SENT");
-            if (info != null) {
-                ack.put("info", info);
-            }
+            ack.put("status", "PERSISTED");
+            ack.put("createdNew", createdNew);
             ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(ack)));
         } catch (Exception ex) {
-            logger.error("sendDeliverAck failed", ex);
+            logger.error("sendServerAck failed", ex);
         }
     }
 

@@ -76,3 +76,8 @@ im:
     origin-whitelist:
       - http://localhost:5173
       - http://127.0.0.1:5173
+  reliability:
+    relay-batch-size: 100
+    relay-fixed-delay-ms: 1000
+    max-retry-count: 8
+    dispatch-topic: im.msg.dispatch

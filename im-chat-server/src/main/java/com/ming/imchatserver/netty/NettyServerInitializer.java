@@ -1,6 +1,7 @@
 package com.ming.imchatserver.netty;
 
 import com.ming.imchatserver.config.NettyProperties;
+import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.service.AuthService;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
@@ -9,7 +10,6 @@ import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
 import io.netty.handler.stream.ChunkedWriteHandler;
 import io.netty.handler.timeout.IdleStateHandler;
-import org.springframework.context.ApplicationEventPublisher;
 /**
  * Netty channel initializer: 支持 HTTP (REST) 与 WebSocket 单端口复用
  */
@@ -20,7 +20,7 @@ import org.springframework.context.ApplicationEventPublisher;
     private final AuthService authService;
     private final ChannelUserManager channelUserManager;
     private final com.ming.imchatserver.service.MessageService messageService;
-    private final ApplicationEventPublisher eventPublisher;
+    private final DeliveryMapper deliveryMapper;
     /**
      * 创建 Channel 初始化器，并注入各业务 Handler 所需依赖。
      */
@@ -29,12 +29,12 @@ import org.springframework.context.ApplicationEventPublisher;
                                   AuthService authService,
                                   ChannelUserManager channelUserManager,
                                   com.ming.imchatserver.service.MessageService messageService,
-                                  ApplicationEventPublisher eventPublisher) {
+                                  DeliveryMapper deliveryMapper) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
         this.messageService = messageService;
-        this.eventPublisher = eventPublisher;
+        this.deliveryMapper = deliveryMapper;
     }
 
     @Override
@@ -61,7 +61,7 @@ import org.springframework.context.ApplicationEventPublisher;
         ch.pipeline().addLast(new WebSocketServerProtocolHandler(properties.getWebsocketPath(), null, true, properties.getMaxContentLength()));
         // 业务帧鉴权（要求 channel 已绑定 userId）
         ch.pipeline().addLast(new WsBusinessAuthHandler(channelUserManager));
-        ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, messageService, properties, eventPublisher));
+        ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, messageService, properties, deliveryMapper));
         ch.pipeline().addLast(new IdleEventHandler(channelUserManager));
     }
 }

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.dao.MessageDO;
+import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.service.MessageService;
 import io.netty.channel.Channel;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -12,7 +13,6 @@ import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -41,7 +41,7 @@ class WebSocketFrameHandlerIntegrationTest {
 
     private ChannelUserManager channelUserManager;
     private MessageService messageService;
-    private ApplicationEventPublisher eventPublisher;
+    private DeliveryMapper deliveryMapper;
     private NettyProperties nettyProperties;
 
     @BeforeEach
@@ -51,7 +51,7 @@ class WebSocketFrameHandlerIntegrationTest {
     void setUp() {
         channelUserManager = mock(ChannelUserManager.class);
         messageService = mock(MessageService.class);
-        eventPublisher = mock(ApplicationEventPublisher.class);
+        deliveryMapper = mock(DeliveryMapper.class);
         nettyProperties = new NettyProperties();
         nettyProperties.setSyncBatchSize(2);
         nettyProperties.setOfflinePullMaxLimit(200);
@@ -69,9 +69,9 @@ class WebSocketFrameHandlerIntegrationTest {
         saved.setFromUserId(10L);
         saved.setToUserId(20L);
         when(messageService.findByServerMsgId("srv-1")).thenReturn(saved);
-        when(messageService.updateStatusByServerMsgId("srv-1", "ACKED")).thenReturn(1, 0);
+        when(messageService.updateStatusByServerMsgId("srv-1", "READ")).thenReturn(1, 0);
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, nettyProperties, eventPublisher));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, nettyProperties, deliveryMapper));
         channel.attr(NettyAttr.USER_ID).set(20L);
 
         String req = "{\"type\":\"ACK_REPORT\",\"serverMsgId\":\"srv-1\"}";
@@ -94,7 +94,7 @@ class WebSocketFrameHandlerIntegrationTest {
      * 方法说明。
      */
     void pullOfflineShouldSupportStableCursorPaginationAndValidateParams() throws Exception {
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, nettyProperties, eventPublisher));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, nettyProperties, deliveryMapper));
         channel.attr(NettyAttr.USER_ID).set(2L);
 
         Instant base = Instant.parse("2026-03-25T00:00:00Z");
@@ -146,7 +146,7 @@ class WebSocketFrameHandlerIntegrationTest {
      * 方法说明。
      */
     void reconnectSyncShouldUseAccurateHasMoreAndOnlyTriggerOnce() throws Exception {
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, nettyProperties, eventPublisher));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, nettyProperties, deliveryMapper));
         channel.attr(NettyAttr.USER_ID).set(100L);
         channel.attr(NettyAttr.AUTH_OK).set(Boolean.TRUE);
 
@@ -176,7 +176,7 @@ class WebSocketFrameHandlerIntegrationTest {
      * 方法说明。
      */
     void chatShouldNotPublishEventForIdempotentReplay() throws Exception {
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, nettyProperties, eventPublisher));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, nettyProperties, deliveryMapper));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         when(messageService.persistMessage(any(MessageDO.class))).thenReturn(new MessageService.PersistResult("existing-1", false));
@@ -185,9 +185,8 @@ class WebSocketFrameHandlerIntegrationTest {
         channel.writeInbound(new TextWebSocketFrame(req));
 
         JsonNode resp = readOutboundJson(channel).get(0);
-        assertEquals("DELIVER_ACK", resp.get("type").asText());
+        assertEquals("SERVER_ACK", resp.get("type").asText());
         assertEquals("existing-1", resp.get("serverMsgId").asText());
-        verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test
@@ -195,7 +194,7 @@ class WebSocketFrameHandlerIntegrationTest {
      * 方法说明。
      */
     void chatValidationShouldRejectInvalidTargetAndBlankContent() throws Exception {
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, nettyProperties, eventPublisher));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, nettyProperties, deliveryMapper));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CHAT\",\"targetUserId\":0,\"content\":\"hello\"}"));
@@ -209,7 +208,6 @@ class WebSocketFrameHandlerIntegrationTest {
         assertEquals("INVALID_PARAM", blankContent.get("code").asText());
 
         verify(messageService, never()).persistMessage(any(MessageDO.class));
-        verify(eventPublisher, never()).publishEvent(any());
     }
     /**
      * 方法说明。

@@ -1,6 +1,7 @@
 package com.ming.imchatserver.netty;
 
 import com.ming.imchatserver.config.NettyProperties;
+import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.service.AuthService;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
@@ -14,7 +15,6 @@ import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
-import org.springframework.context.ApplicationEventPublisher;
 import java.net.InetSocketAddress;
 /**
  * Netty WebSocket 服务启动器。
@@ -30,7 +30,7 @@ public class NettyWebSocketServer {
     private final AuthService authService;
     private final ChannelUserManager channelUserManager;
     private final com.ming.imchatserver.service.MessageService messageService;
-    private final ApplicationEventPublisher eventPublisher;
+    private final DeliveryMapper deliveryMapper;
 
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
@@ -42,19 +42,19 @@ public class NettyWebSocketServer {
      * @param authService         认证服务（用于握手阶段）
      * @param channelUserManager  在线连接管理
      * @param messageService      消息服务
-     * @param eventPublisher      事件发布器（用于业务事件解耦）
+     * @param deliveryMapper      ACK 持久化组件
      */
     
     public NettyWebSocketServer(NettyProperties properties,
                                 AuthService authService,
                                 ChannelUserManager channelUserManager,
                                 com.ming.imchatserver.service.MessageService messageService,
-                                ApplicationEventPublisher eventPublisher) {
+                                DeliveryMapper deliveryMapper) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
         this.messageService = messageService;
-        this.eventPublisher = eventPublisher;
+        this.deliveryMapper = deliveryMapper;
     }
 
     @EventListener(ApplicationReadyEvent.class)    /**
@@ -70,7 +70,7 @@ public class NettyWebSocketServer {
         b.group(bossGroup, workerGroup)
                 .channel(NioServerSocketChannel.class)
                 .localAddress(new InetSocketAddress(properties.getPort()))
-                .childHandler(new NettyServerInitializer(properties, authService, channelUserManager, messageService, eventPublisher));
+                .childHandler(new NettyServerInitializer(properties, authService, channelUserManager, messageService, deliveryMapper));
         serverChannel = b.bind().sync().channel();
         logger.info("Netty server started and listening on {}", properties.getPort());
     }
