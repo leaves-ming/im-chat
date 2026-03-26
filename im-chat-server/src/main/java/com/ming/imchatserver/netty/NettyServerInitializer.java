@@ -4,6 +4,7 @@ import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.service.AuthService;
+import com.ming.imchatserver.service.GroupService;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.codec.http.HttpObjectAggregator;
@@ -21,6 +22,7 @@ import io.netty.handler.timeout.IdleStateHandler;
     private final AuthService authService;
     private final ChannelUserManager channelUserManager;
     private final com.ming.imchatserver.service.MessageService messageService;
+    private final GroupService groupService;
     private final DeliveryMapper deliveryMapper;
     private final MetricsService metricsService;
     /**
@@ -31,12 +33,14 @@ import io.netty.handler.timeout.IdleStateHandler;
                                   AuthService authService,
                                   ChannelUserManager channelUserManager,
                                   com.ming.imchatserver.service.MessageService messageService,
+                                  GroupService groupService,
                                   DeliveryMapper deliveryMapper,
                                   MetricsService metricsService) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
         this.messageService = messageService;
+        this.groupService = groupService;
         this.deliveryMapper = deliveryMapper;
         this.metricsService = metricsService;
     }
@@ -65,7 +69,7 @@ import io.netty.handler.timeout.IdleStateHandler;
         ch.pipeline().addLast(new WebSocketServerProtocolHandler(properties.getWebsocketPath(), null, true, properties.getMaxContentLength()));
         // 业务帧鉴权（要求 channel 已绑定 userId）
         ch.pipeline().addLast(new WsBusinessAuthHandler(channelUserManager));
-        ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, messageService, properties, deliveryMapper, metricsService));
+        ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, messageService, groupService, properties, deliveryMapper, metricsService));
         ch.pipeline().addLast(new IdleEventHandler(channelUserManager));
     }
 }

@@ -68,8 +68,10 @@ class GroupServiceImplTest {
         activeMember.setMemberStatus(GroupDomainConstants.MEMBER_STATUS_ACTIVE);
         when(groupMemberMapper.findActiveMember(1L, 2L)).thenReturn(activeMember);
 
-        service.joinGroup(1L, 2L);
+        GroupService.JoinGroupResult result = service.joinGroup(1L, 2L);
 
+        assertTrue(result.isJoined());
+        assertTrue(result.isIdempotent());
         verify(groupMemberMapper, never()).upsertJoin(any(), any(), any(Integer.class), any(Integer.class));
     }
 
@@ -105,6 +107,23 @@ class GroupServiceImplTest {
         GroupBizException ex = assertThrows(GroupBizException.class, () -> service.quitGroup(1L, 9L));
         assertEquals(GroupErrorCode.OWNER_CANNOT_QUIT, ex.getCode());
         verify(groupMemberMapper, never()).markQuit(any(), any());
+    }
+
+    @Test
+    /**
+     * 方法说明。
+     */
+    void quitGroupShouldReturnIdempotentWhenNotActiveMember() {
+        GroupMapper groupMapper = mock(GroupMapper.class);
+        GroupMemberMapper groupMemberMapper = mock(GroupMemberMapper.class);
+        GroupService service = new GroupServiceImpl(groupMapper, groupMemberMapper);
+
+        when(groupMapper.findById(1L)).thenReturn(activeGroup(1L, 9L, 1000));
+        when(groupMemberMapper.markQuit(1L, 8L)).thenReturn(0);
+
+        GroupService.QuitGroupResult result = service.quitGroup(1L, 8L);
+        assertTrue(result.isQuit());
+        assertTrue(result.isIdempotent());
     }
 
     @Test

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.mapper.DeliveryMapper;
+import com.ming.imchatserver.service.GroupService;
 import com.ming.imchatserver.service.MessageService;
 import io.netty.channel.Channel;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -42,6 +43,7 @@ class WebSocketFrameHandlerIntegrationTest {
 
     private ChannelUserManager channelUserManager;
     private MessageService messageService;
+    private GroupService groupService;
     private DeliveryMapper deliveryMapper;
     private NettyProperties nettyProperties;
 
@@ -52,6 +54,7 @@ class WebSocketFrameHandlerIntegrationTest {
     void setUp() {
         channelUserManager = mock(ChannelUserManager.class);
         messageService = mock(MessageService.class);
+        groupService = mock(GroupService.class);
         deliveryMapper = mock(DeliveryMapper.class);
         nettyProperties = new NettyProperties();
         nettyProperties.setSyncBatchSize(2);
@@ -72,7 +75,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(messageService.findByServerMsgId("srv-1")).thenReturn(saved);
         when(messageService.updateStatusByServerMsgId("srv-1", "READ")).thenReturn(1, 0);
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, nettyProperties, deliveryMapper));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, groupService, nettyProperties, deliveryMapper, null));
         channel.attr(NettyAttr.USER_ID).set(20L);
 
         String req = "{\"type\":\"ACK_REPORT\",\"serverMsgId\":\"srv-1\"}";
@@ -95,7 +98,7 @@ class WebSocketFrameHandlerIntegrationTest {
      * 方法说明。
      */
     void pullOfflineShouldSupportStableCursorPaginationAndValidateParams() throws Exception {
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, nettyProperties, deliveryMapper));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, groupService, nettyProperties, deliveryMapper, null));
         channel.attr(NettyAttr.USER_ID).set(2L);
 
         Instant base = Instant.parse("2026-03-25T00:00:00Z");
@@ -147,7 +150,7 @@ class WebSocketFrameHandlerIntegrationTest {
      * 方法说明。
      */
     void reconnectSyncShouldUseAccurateHasMoreAndOnlyTriggerOnce() throws Exception {
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, nettyProperties, deliveryMapper));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, groupService, nettyProperties, deliveryMapper, null));
         channel.attr(NettyAttr.USER_ID).set(100L);
         channel.attr(NettyAttr.AUTH_OK).set(Boolean.TRUE);
 
@@ -177,7 +180,7 @@ class WebSocketFrameHandlerIntegrationTest {
      * 方法说明。
      */
     void chatShouldNotPublishEventForIdempotentReplay() throws Exception {
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, nettyProperties, deliveryMapper));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, groupService, nettyProperties, deliveryMapper, null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         when(messageService.persistMessage(any(MessageDO.class))).thenReturn(new MessageService.PersistResult("existing-1", false));
@@ -195,7 +198,7 @@ class WebSocketFrameHandlerIntegrationTest {
      * 方法说明。
      */
     void chatValidationShouldRejectInvalidTargetAndBlankContent() throws Exception {
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, nettyProperties, deliveryMapper));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, groupService, nettyProperties, deliveryMapper, null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CHAT\",\"targetUserId\":0,\"content\":\"hello\"}"));
@@ -226,7 +229,7 @@ class WebSocketFrameHandlerIntegrationTest {
         saved.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
         when(messageService.findByServerMsgId("srv-x")).thenReturn(saved);
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, nettyProperties, deliveryMapper));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, groupService, nettyProperties, deliveryMapper, null));
         channel.attr(NettyAttr.USER_ID).set(30L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"ACK_REPORT\",\"serverMsgId\":\"srv-x\"}"));
@@ -240,6 +243,42 @@ class WebSocketFrameHandlerIntegrationTest {
         verify(deliveryMapper, never()).upsertAck(any(), any(), any(), any());
         verify(channelUserManager, never()).getChannels(anyLong());
         assertTrue(readOutboundJson(senderChannel).isEmpty());
+    }
+
+    @Test
+    /**
+     * 方法说明。
+     */
+    void groupJoinShouldReturnIdempotentResult() throws Exception {
+        when(groupService.joinGroup(101L, 1L)).thenReturn(new GroupService.JoinGroupResult(true, true));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, groupService, nettyProperties, deliveryMapper, null));
+        channel.attr(NettyAttr.USER_ID).set(1L);
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_JOIN\",\"groupId\":101}"));
+        JsonNode resp = readOutboundJson(channel).get(0);
+
+        assertEquals("GROUP_JOIN_RESULT", resp.get("type").asText());
+        assertEquals(101L, resp.get("groupId").asLong());
+        assertTrue(resp.get("joined").asBoolean());
+        assertTrue(resp.get("idempotent").asBoolean());
+    }
+
+    @Test
+    /**
+     * 方法说明。
+     */
+    void groupQuitShouldReturnIdempotentResult() throws Exception {
+        when(groupService.quitGroup(101L, 1L)).thenReturn(new GroupService.QuitGroupResult(true, true));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, groupService, nettyProperties, deliveryMapper, null));
+        channel.attr(NettyAttr.USER_ID).set(1L);
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_QUIT\",\"groupId\":101}"));
+        JsonNode resp = readOutboundJson(channel).get(0);
+
+        assertEquals("GROUP_QUIT_RESULT", resp.get("type").asText());
+        assertEquals(101L, resp.get("groupId").asLong());
+        assertTrue(resp.get("quit").asBoolean());
+        assertTrue(resp.get("idempotent").asBoolean());
     }
     /**
      * 方法说明。

@@ -5,9 +5,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ming.imchatserver.config.NettyProperties;
+import com.ming.imchatserver.dao.GroupMemberDO;
 import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.metrics.MetricsService;
+import com.ming.imchatserver.service.GroupBizException;
+import com.ming.imchatserver.service.GroupService;
 import com.ming.imchatserver.service.MessageService;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
@@ -41,6 +44,7 @@ import java.util.List;
     private final ChannelUserManager channelUserManager;
     private final ObjectMapper mapper = new ObjectMapper();
     private final MessageService messageService;
+    private final GroupService groupService;
     private final NettyProperties nettyProperties;
     private final DeliveryMapper deliveryMapper;
     private final MetricsService metricsService;
@@ -53,11 +57,13 @@ import java.util.List;
     
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
                                  MessageService messageService,
+                                 GroupService groupService,
                                  NettyProperties nettyProperties,
                                  DeliveryMapper deliveryMapper,
                                  MetricsService metricsService) {
         this.channelUserManager = channelUserManager;
         this.messageService = messageService;
+        this.groupService = groupService;
         this.nettyProperties = nettyProperties;
         this.deliveryMapper = deliveryMapper;
         this.metricsService = metricsService;
@@ -70,7 +76,7 @@ import java.util.List;
                                  MessageService messageService,
                                  NettyProperties nettyProperties,
                                  DeliveryMapper deliveryMapper) {
-        this(channelUserManager, messageService, nettyProperties, deliveryMapper, null);
+        this(channelUserManager, messageService, null, nettyProperties, deliveryMapper, null);
     }
 
     @Override
@@ -180,12 +186,114 @@ import java.util.List;
                 case "CHAT" -> handleChat(ch, fromUserId, node);
                 case "DELIVER_ACK_REPORT", "READ_ACK_REPORT", "ACK_REPORT" -> handleAckReport(ch, node, type);
                 case "PULL_OFFLINE" -> handlePullOffline(ch, fromUserId, node);
+                case "GROUP_JOIN" -> handleGroupJoin(ch, fromUserId, node);
+                case "GROUP_QUIT" -> handleGroupQuit(ch, fromUserId, node);
+                case "GROUP_MEMBER_LIST" -> handleGroupMemberList(ch, fromUserId, node);
                 default -> sendError(ch, "UNSUPPORTED_CMD", "unsupported command: " + type);
             }
+        } catch (GroupBizException ex) {
+            sendError(ch, ex.getCode().name(), ex.getMessage());
         } catch (Exception ex) {
             logger.error("process text frame error", ex);
             sendError(ch, "INTERNAL_ERROR", "internal error");
         }
+    }
+
+    private void handleGroupJoin(Channel ch, Long userId, JsonNode node) throws Exception {
+        if (userId == null) {
+            sendError(ch, "UNAUTHORIZED", "user not bound");
+            return;
+        }
+        long groupId = node.path("groupId").asLong(0L);
+        if (groupId <= 0) {
+            sendError(ch, "INVALID_PARAM", "groupId must be greater than 0");
+            return;
+        }
+        if (groupService == null) {
+            sendError(ch, "INTERNAL_ERROR", "group service unavailable");
+            return;
+        }
+
+        GroupService.JoinGroupResult result = groupService.joinGroup(groupId, userId);
+        ObjectNode resp = mapper.createObjectNode();
+        resp.put("type", "GROUP_JOIN_RESULT");
+        resp.put("groupId", groupId);
+        resp.put("success", true);
+        resp.put("joined", result.isJoined());
+        resp.put("idempotent", result.isIdempotent());
+        ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(resp)));
+    }
+
+    private void handleGroupQuit(Channel ch, Long userId, JsonNode node) throws Exception {
+        if (userId == null) {
+            sendError(ch, "UNAUTHORIZED", "user not bound");
+            return;
+        }
+        long groupId = node.path("groupId").asLong(0L);
+        if (groupId <= 0) {
+            sendError(ch, "INVALID_PARAM", "groupId must be greater than 0");
+            return;
+        }
+        if (groupService == null) {
+            sendError(ch, "INTERNAL_ERROR", "group service unavailable");
+            return;
+        }
+
+        GroupService.QuitGroupResult result = groupService.quitGroup(groupId, userId);
+        ObjectNode resp = mapper.createObjectNode();
+        resp.put("type", "GROUP_QUIT_RESULT");
+        resp.put("groupId", groupId);
+        resp.put("success", true);
+        resp.put("quit", result.isQuit());
+        resp.put("idempotent", result.isIdempotent());
+        ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(resp)));
+    }
+
+    private void handleGroupMemberList(Channel ch, Long userId, JsonNode node) throws Exception {
+        if (userId == null) {
+            sendError(ch, "UNAUTHORIZED", "user not bound");
+            return;
+        }
+        long groupId = node.path("groupId").asLong(0L);
+        if (groupId <= 0) {
+            sendError(ch, "INVALID_PARAM", "groupId must be greater than 0");
+            return;
+        }
+        int limit = node.has("limit") ? node.path("limit").asInt(50) : 50;
+        if (limit <= 0) {
+            sendError(ch, "INVALID_PARAM", "limit must be greater than 0");
+            return;
+        }
+        Long cursorUserId = node.has("cursorUserId") && !node.get("cursorUserId").isNull()
+                ? node.get("cursorUserId").asLong()
+                : null;
+        if (groupService == null) {
+            sendError(ch, "INTERNAL_ERROR", "group service unavailable");
+            return;
+        }
+
+        GroupService.MemberPageResult page = groupService.listMembers(groupId, cursorUserId, limit);
+        ObjectNode resp = mapper.createObjectNode();
+        resp.put("type", "GROUP_MEMBER_LIST_RESULT");
+        resp.put("groupId", groupId);
+        resp.put("success", true);
+        resp.put("hasMore", page.isHasMore());
+        if (page.getNextCursor() == null) {
+            resp.putNull("nextCursor");
+        } else {
+            resp.put("nextCursor", page.getNextCursor());
+        }
+
+        ArrayNode items = mapper.createArrayNode();
+        for (GroupMemberDO member : page.getItems()) {
+            ObjectNode item = mapper.createObjectNode();
+            item.put("userId", member.getUserId());
+            item.put("role", member.getRole());
+            item.put("memberStatus", member.getMemberStatus());
+            items.add(item);
+        }
+        resp.set("items", items);
+        ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(resp)));
     }
 
     /**

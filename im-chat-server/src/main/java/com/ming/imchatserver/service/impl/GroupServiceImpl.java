@@ -54,7 +54,7 @@ public class GroupServiceImpl implements GroupService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void joinGroup(Long groupId, Long userId) {
+    public JoinGroupResult joinGroup(Long groupId, Long userId) {
         if (groupId == null || groupId <= 0 || userId == null || userId <= 0) {
             throw new GroupBizException(GroupErrorCode.INVALID_PARAM, "invalid join params");
         }
@@ -63,7 +63,7 @@ public class GroupServiceImpl implements GroupService {
 
         GroupMemberDO activeMember = groupMemberMapper.findActiveMember(groupId, userId);
         if (activeMember != null) {
-            return;
+            return new JoinGroupResult(true, true);
         }
 
         int activeCount = groupMemberMapper.countActiveMembers(groupId);
@@ -83,11 +83,12 @@ public class GroupServiceImpl implements GroupService {
         if (latestCount > group.getMemberLimit()) {
             throw new GroupBizException(GroupErrorCode.GROUP_FULL, "group is full");
         }
+        return new JoinGroupResult(true, false);
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void quitGroup(Long groupId, Long userId) {
+    public QuitGroupResult quitGroup(Long groupId, Long userId) {
         if (groupId == null || groupId <= 0 || userId == null || userId <= 0) {
             throw new GroupBizException(GroupErrorCode.INVALID_PARAM, "invalid quit params");
         }
@@ -100,7 +101,8 @@ public class GroupServiceImpl implements GroupService {
             throw new GroupBizException(GroupErrorCode.OWNER_CANNOT_QUIT, "owner cannot quit");
         }
 
-        groupMemberMapper.markQuit(groupId, userId);
+        int updated = groupMemberMapper.markQuit(groupId, userId);
+        return new QuitGroupResult(true, updated == 0);
     }
 
     @Override

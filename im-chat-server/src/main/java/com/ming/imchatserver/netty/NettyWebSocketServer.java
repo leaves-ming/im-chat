@@ -4,6 +4,7 @@ import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.service.AuthService;
+import com.ming.imchatserver.service.GroupService;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.EventLoopGroup;
@@ -31,6 +32,7 @@ public class NettyWebSocketServer {
     private final AuthService authService;
     private final ChannelUserManager channelUserManager;
     private final com.ming.imchatserver.service.MessageService messageService;
+    private final GroupService groupService;
     private final DeliveryMapper deliveryMapper;
     private final MetricsService metricsService;
 
@@ -51,12 +53,14 @@ public class NettyWebSocketServer {
                                 AuthService authService,
                                 ChannelUserManager channelUserManager,
                                 com.ming.imchatserver.service.MessageService messageService,
+                                GroupService groupService,
                                 DeliveryMapper deliveryMapper,
                                 MetricsService metricsService) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
         this.messageService = messageService;
+        this.groupService = groupService;
         this.deliveryMapper = deliveryMapper;
         this.metricsService = metricsService;
     }
@@ -74,7 +78,7 @@ public class NettyWebSocketServer {
         b.group(bossGroup, workerGroup)
                 .channel(NioServerSocketChannel.class)
                 .localAddress(new InetSocketAddress(properties.getPort()))
-                .childHandler(new NettyServerInitializer(properties, authService, channelUserManager, messageService, deliveryMapper, metricsService));
+                .childHandler(new NettyServerInitializer(properties, authService, channelUserManager, messageService, groupService, deliveryMapper, metricsService));
         serverChannel = b.bind().sync().channel();
         logger.info("Netty server started and listening on {}", properties.getPort());
     }
