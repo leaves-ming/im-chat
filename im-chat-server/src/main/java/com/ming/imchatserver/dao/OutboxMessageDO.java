@@ -15,7 +15,7 @@ public class OutboxMessageDO {
     private String topic;
     private String tag;
     private String payload;
-    /** 0=NEW,1=SENT,2=FAILED,3=DLQ */
+    /** 0=NEW,1=SENT,2=FAILED,3=DLQ,4=PROCESSING */
     private Integer status;
     private Integer retryCount;
     private Date nextRetryAt;

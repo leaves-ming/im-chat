@@ -40,12 +40,22 @@ public interface OutboxMapper {
 
     @Update("""
             UPDATE im_message_outbox
+            SET status = 4,
+                updated_at = NOW()
+            WHERE id = #{id}
+              AND status IN (0, 2)
+              AND next_retry_at <= #{now}
+            """)
+    int claimForProcessing(@Param("id") Long id, @Param("now") Date now);
+
+    @Update("""
+            UPDATE im_message_outbox
             SET status = 1,
                 sent_at = NOW(),
                 fail_reason = NULL,
                 updated_at = NOW()
             WHERE id = #{id}
-              AND status IN (0, 2)
+              AND status = 4
             """)
     int markSent(@Param("id") Long id);
 
@@ -57,6 +67,7 @@ public interface OutboxMapper {
                 fail_reason = #{failReason},
                 updated_at = NOW()
             WHERE id = #{id}
+              AND status = 4
             """)
     int markRetryOrDlq(@Param("id") Long id,
                        @Param("status") int status,

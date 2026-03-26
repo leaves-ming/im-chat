@@ -233,6 +233,15 @@ import java.util.List;
             sendError(ch, "INVALID_PARAM", "serverMsgId required");
             return;
         }
+        MessageDO m = messageService.findByServerMsgId(serverMsgId);
+        if (m == null) {
+            sendError(ch, "INVALID_PARAM", "serverMsgId not found");
+            return;
+        }
+        if (reporterUserId == null || !reporterUserId.equals(m.getToUserId())) {
+            sendError(ch, "FORBIDDEN", "not message recipient");
+            return;
+        }
         String targetStatus = ("READ_ACK_REPORT".equals(reportType) || "ACK_REPORT".equals(reportType)) ? "READ" : "DELIVERED";
         int updated = messageService.updateStatusByServerMsgId(serverMsgId, targetStatus);
 
@@ -243,25 +252,22 @@ import java.util.List;
         resp.put("updated", updated);
         ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(resp)));
         if (updated > 0) {
-            MessageDO m = messageService.findByServerMsgId(serverMsgId);
-            if (m != null) {
-                Date now = new Date();
-                if ("READ".equals(targetStatus)) {
-                    deliveryMapper.upsertAck(m.getId(), reporterUserId, now, now);
-                    recordAckLatency(targetStatus, m.getCreatedAt(), now);
-                } else {
-                    deliveryMapper.upsertAck(m.getId(), reporterUserId, now, null);
-                    recordAckLatency(targetStatus, m.getCreatedAt(), now);
-                }
-                ObjectNode notify = mapper.createObjectNode();
-                notify.put("type", "MSG_STATUS_NOTIFY");
-                notify.put("serverMsgId", serverMsgId);
-                notify.put("status", targetStatus);
-                notify.put("toUserId", m.getToUserId());
-                String payload = mapper.writeValueAsString(notify);
-                for (Channel c : channelUserManager.getChannels(m.getFromUserId())) {
-                    c.writeAndFlush(new TextWebSocketFrame(payload));
-                }
+            Date now = new Date();
+            if ("READ".equals(targetStatus)) {
+                deliveryMapper.upsertAck(m.getId(), reporterUserId, now, now);
+                recordAckLatency(targetStatus, m.getCreatedAt(), now);
+            } else {
+                deliveryMapper.upsertAck(m.getId(), reporterUserId, now, null);
+                recordAckLatency(targetStatus, m.getCreatedAt(), now);
+            }
+            ObjectNode notify = mapper.createObjectNode();
+            notify.put("type", "MSG_STATUS_NOTIFY");
+            notify.put("serverMsgId", serverMsgId);
+            notify.put("status", targetStatus);
+            notify.put("toUserId", m.getToUserId());
+            String payload = mapper.writeValueAsString(notify);
+            for (Channel c : channelUserManager.getChannels(m.getFromUserId())) {
+                c.writeAndFlush(new TextWebSocketFrame(payload));
             }
         }
     }

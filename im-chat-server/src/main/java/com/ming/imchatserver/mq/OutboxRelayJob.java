@@ -20,6 +20,8 @@ import java.util.List;
 public class OutboxRelayJob {
 
     private static final Logger logger = LoggerFactory.getLogger(OutboxRelayJob.class);
+    private static final int OUTBOX_STATUS_DLQ = 3;
+    private static final int OUTBOX_STATUS_FAILED = 2;
 
     private final OutboxMapper outboxMapper;
     private final DispatchProducer dispatchProducer;
@@ -45,6 +47,10 @@ public class OutboxRelayJob {
         }
 
         for (OutboxMessageDO outbox : batch) {
+            int claimed = outboxMapper.claimForProcessing(outbox.getId(), new Date());
+            if (claimed <= 0) {
+                continue;
+            }
             metricsService.incrementRelaySend();
             try {
                 DispatchMessagePayload payload = objectMapper.readValue(outbox.getPayload(), DispatchMessagePayload.class);
@@ -61,7 +67,7 @@ public class OutboxRelayJob {
         metricsService.incrementRelayFail();
         int nextRetryCount = (outbox.getRetryCount() == null ? 0 : outbox.getRetryCount()) + 1;
         boolean toDlq = nextRetryCount >= reliabilityProperties.getMaxRetryCount();
-        int nextStatus = toDlq ? 3 : 2;
+        int nextStatus = toDlq ? OUTBOX_STATUS_DLQ : OUTBOX_STATUS_FAILED;
         Date nextRetryAt = toDlq ? new Date() : new Date(System.currentTimeMillis() + backoffMs(nextRetryCount));
         String reason = ex.getMessage();
         if (reason != null && reason.length() > 250) {

@@ -24,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -208,6 +209,37 @@ class WebSocketFrameHandlerIntegrationTest {
         assertEquals("INVALID_PARAM", blankContent.get("code").asText());
 
         verify(messageService, never()).persistMessage(any(MessageDO.class));
+    }
+
+    @Test
+    /**
+     * 方法说明。
+     */
+    void ackReportShouldRejectNonRecipientAndNoSideEffect() throws Exception {
+        EmbeddedChannel senderChannel = new EmbeddedChannel();
+        when(channelUserManager.getChannels(10L)).thenReturn(List.of(senderChannel));
+
+        MessageDO saved = new MessageDO();
+        saved.setId(1L);
+        saved.setFromUserId(10L);
+        saved.setToUserId(20L);
+        saved.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
+        when(messageService.findByServerMsgId("srv-x")).thenReturn(saved);
+
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, nettyProperties, deliveryMapper));
+        channel.attr(NettyAttr.USER_ID).set(30L);
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"ACK_REPORT\",\"serverMsgId\":\"srv-x\"}"));
+
+        List<JsonNode> out = readOutboundJson(channel);
+        assertEquals(1, out.size());
+        assertEquals("ERROR", out.get(0).get("type").asText());
+        assertEquals("FORBIDDEN", out.get(0).get("code").asText());
+
+        verify(messageService, never()).updateStatusByServerMsgId(any(), any());
+        verify(deliveryMapper, never()).upsertAck(any(), any(), any(), any());
+        verify(channelUserManager, never()).getChannels(anyLong());
+        assertTrue(readOutboundJson(senderChannel).isEmpty());
     }
     /**
      * 方法说明。
