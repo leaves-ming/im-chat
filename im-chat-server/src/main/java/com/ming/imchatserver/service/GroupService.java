@@ -17,6 +17,10 @@ public interface GroupService {
 
     MemberPageResult listMembers(Long groupId, Long cursorUserId, Integer limit);
 
+    boolean isActiveMember(Long groupId, Long userId);
+
+    List<Long> listActiveMemberUserIds(Long groupId);
+
     class CreateGroupResult {
         private final Long groupId;
         private final String groupNo;

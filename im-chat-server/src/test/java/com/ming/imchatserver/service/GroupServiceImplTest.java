@@ -7,10 +7,19 @@ import com.ming.imchatserver.mapper.GroupMapper;
 import com.ming.imchatserver.mapper.GroupMemberMapper;
 import com.ming.imchatserver.service.impl.GroupServiceImpl;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -48,7 +57,11 @@ class GroupServiceImplTest {
 
         assertEquals(100L, result.getGroupId());
         assertNotNull(result.getGroupNo());
-        verify(groupMapper).insertGroup(any(GroupDO.class));
+        ArgumentCaptor<GroupDO> groupCaptor = ArgumentCaptor.forClass(GroupDO.class);
+        verify(groupMapper).insertGroup(groupCaptor.capture());
+        GroupDO inserted = groupCaptor.getValue();
+        assertEquals(1L, inserted.getOwnerUserId());
+        assertEquals(GroupDomainConstants.GROUP_STATUS_ACTIVE, inserted.getStatus());
         verify(groupMemberMapper).insertOwner(100L, 1L);
     }
 
@@ -143,6 +156,64 @@ class GroupServiceImplTest {
         assertEquals(2, page.getItems().size());
         assertTrue(page.isHasMore());
         assertEquals(22L, page.getNextCursor());
+    }
+
+    @Test
+    void joinGroupShouldBeIdempotentSuccessUnderConcurrencyAndKeepSingleActiveRelation() throws Exception {
+        GroupMapper groupMapper = mock(GroupMapper.class);
+        GroupMemberMapper groupMemberMapper = mock(GroupMemberMapper.class);
+        GroupService service = new GroupServiceImpl(groupMapper, groupMemberMapper);
+
+        when(groupMapper.findById(1L)).thenReturn(activeGroup(1L, 10L, 1000));
+
+        Set<Long> activeUsers = ConcurrentHashMap.newKeySet();
+        when(groupMemberMapper.findActiveMember(1L, 2L)).thenAnswer(invocation -> {
+            if (!activeUsers.contains(2L)) {
+                return null;
+            }
+            GroupMemberDO member = new GroupMemberDO();
+            member.setGroupId(1L);
+            member.setUserId(2L);
+            member.setMemberStatus(GroupDomainConstants.MEMBER_STATUS_ACTIVE);
+            return member;
+        });
+        when(groupMemberMapper.upsertJoin(1L, 2L, GroupDomainConstants.MEMBER_ROLE_MEMBER, GroupDomainConstants.MEMBER_STATUS_ACTIVE))
+                .thenAnswer(invocation -> {
+                    activeUsers.add(2L);
+                    return 1;
+                });
+        when(groupMemberMapper.countActiveMembers(1L)).thenAnswer(invocation -> activeUsers.size());
+
+        int concurrency = 16;
+        ExecutorService executor = Executors.newFixedThreadPool(concurrency);
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch ready = new CountDownLatch(concurrency);
+        List<Future<GroupService.JoinGroupResult>> futures = new java.util.ArrayList<>();
+        for (int i = 0; i < concurrency; i++) {
+            futures.add(executor.submit(() -> {
+                ready.countDown();
+                start.await(3, TimeUnit.SECONDS);
+                return service.joinGroup(1L, 2L);
+            }));
+        }
+        ready.await(3, TimeUnit.SECONDS);
+        start.countDown();
+
+        int exceptionCount = 0;
+        for (Future<GroupService.JoinGroupResult> future : futures) {
+            try {
+                GroupService.JoinGroupResult result = future.get(3, TimeUnit.SECONDS);
+                assertTrue(result.isJoined());
+            } catch (Exception ex) {
+                exceptionCount++;
+            }
+        }
+        executor.shutdownNow();
+
+        assertEquals(0, exceptionCount);
+        assertEquals(1, activeUsers.size());
+        assertFalse(activeUsers.isEmpty());
+        verify(groupMemberMapper, never()).markQuit(any(), any());
     }
 
     private GroupDO activeGroup(Long id, Long ownerUserId, int memberLimit) {

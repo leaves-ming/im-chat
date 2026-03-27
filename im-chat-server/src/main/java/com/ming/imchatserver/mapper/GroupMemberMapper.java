@@ -85,4 +85,13 @@ public interface GroupMemberMapper {
             LIMIT 1
             """)
     GroupMemberDO findActiveMember(@Param("groupId") Long groupId, @Param("userId") Long userId);
+
+    @Select("""
+            SELECT user_id
+            FROM im_group_member
+            WHERE group_id = #{groupId}
+              AND member_status = 1
+            ORDER BY user_id ASC
+            """)
+    List<Long> findActiveUserIds(@Param("groupId") Long groupId);
 }

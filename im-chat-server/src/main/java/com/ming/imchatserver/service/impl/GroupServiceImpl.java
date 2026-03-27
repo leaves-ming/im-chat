@@ -122,6 +122,24 @@ public class GroupServiceImpl implements GroupService {
         return new MemberPageResult(items, nextCursor, hasMore);
     }
 
+    @Override
+    public boolean isActiveMember(Long groupId, Long userId) {
+        if (groupId == null || groupId <= 0 || userId == null || userId <= 0) {
+            return false;
+        }
+        requireActiveGroup(groupId);
+        return groupMemberMapper.findActiveMember(groupId, userId) != null;
+    }
+
+    @Override
+    public List<Long> listActiveMemberUserIds(Long groupId) {
+        if (groupId == null || groupId <= 0) {
+            throw new GroupBizException(GroupErrorCode.INVALID_PARAM, "invalid groupId");
+        }
+        requireActiveGroup(groupId);
+        return groupMemberMapper.findActiveUserIds(groupId);
+    }
+
     private int normalizeLimit(Integer limit) {
         if (limit == null || limit <= 0) {
             return 50;

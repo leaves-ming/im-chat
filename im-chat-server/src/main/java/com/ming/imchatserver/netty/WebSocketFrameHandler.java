@@ -6,10 +6,12 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.dao.GroupMemberDO;
+import com.ming.imchatserver.dao.GroupMessageDO;
 import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.service.GroupBizException;
+import com.ming.imchatserver.service.GroupMessageService;
 import com.ming.imchatserver.service.GroupService;
 import com.ming.imchatserver.service.MessageService;
 import io.netty.channel.Channel;
@@ -40,11 +42,13 @@ import java.util.List;
 
     private static final Logger logger = LoggerFactory.getLogger(WebSocketFrameHandler.class);
     private static final int DEFAULT_PULL_MAX_LIMIT = 200;
+    private static final int DEFAULT_GROUP_PULL_LIMIT = 50;
 
     private final ChannelUserManager channelUserManager;
     private final ObjectMapper mapper = new ObjectMapper();
     private final MessageService messageService;
     private final GroupService groupService;
+    private final GroupMessageService groupMessageService;
     private final NettyProperties nettyProperties;
     private final DeliveryMapper deliveryMapper;
     private final MetricsService metricsService;
@@ -58,12 +62,14 @@ import java.util.List;
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
                                  MessageService messageService,
                                  GroupService groupService,
+                                 GroupMessageService groupMessageService,
                                  NettyProperties nettyProperties,
                                  DeliveryMapper deliveryMapper,
                                  MetricsService metricsService) {
         this.channelUserManager = channelUserManager;
         this.messageService = messageService;
         this.groupService = groupService;
+        this.groupMessageService = groupMessageService;
         this.nettyProperties = nettyProperties;
         this.deliveryMapper = deliveryMapper;
         this.metricsService = metricsService;
@@ -76,7 +82,7 @@ import java.util.List;
                                  MessageService messageService,
                                  NettyProperties nettyProperties,
                                  DeliveryMapper deliveryMapper) {
-        this(channelUserManager, messageService, null, nettyProperties, deliveryMapper, null);
+        this(channelUserManager, messageService, null, null, nettyProperties, deliveryMapper, null);
     }
 
     @Override
@@ -189,6 +195,8 @@ import java.util.List;
                 case "GROUP_JOIN" -> handleGroupJoin(ch, fromUserId, node);
                 case "GROUP_QUIT" -> handleGroupQuit(ch, fromUserId, node);
                 case "GROUP_MEMBER_LIST" -> handleGroupMemberList(ch, fromUserId, node);
+                case "GROUP_CHAT" -> handleGroupChat(ch, fromUserId, node);
+                case "GROUP_PULL_OFFLINE" -> handleGroupPullOffline(ch, fromUserId, node);
                 default -> sendError(ch, "UNSUPPORTED_CMD", "unsupported command: " + type);
             }
         } catch (GroupBizException ex) {
@@ -294,6 +302,109 @@ import java.util.List;
         }
         resp.set("items", items);
         ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(resp)));
+    }
+
+    private void handleGroupChat(Channel ch, Long fromUserId, JsonNode node) throws Exception {
+        if (fromUserId == null) {
+            sendError(ch, "UNAUTHORIZED", "user not bound");
+            return;
+        }
+        long groupId = node.path("groupId").asLong(0L);
+        if (groupId <= 0) {
+            sendError(ch, "INVALID_PARAM", "groupId must be greater than 0");
+            return;
+        }
+        String content = node.path("content").asText("");
+        if (content == null || content.trim().isEmpty()) {
+            sendError(ch, "INVALID_PARAM", "content must not be blank");
+            return;
+        }
+        if (groupService == null || groupMessageService == null) {
+            sendError(ch, "INTERNAL_ERROR", "group message service unavailable");
+            return;
+        }
+        if (!groupService.isActiveMember(groupId, fromUserId)) {
+            sendError(ch, "FORBIDDEN", "sender is not active group member");
+            return;
+        }
+
+        String clientMsgId = normalizeClientMsgId(node.path("clientMsgId").asText(null));
+        GroupMessageService.PersistResult persistResult = groupMessageService.persistTextMessage(groupId, fromUserId, clientMsgId, content);
+        GroupMessageDO message = persistResult.getMessage();
+
+        String pushPayload = buildGroupPushPayload(message);
+        for (Long userId : groupService.listActiveMemberUserIds(groupId)) {
+            for (Channel targetChannel : channelUserManager.getChannels(userId)) {
+                targetChannel.writeAndFlush(new TextWebSocketFrame(pushPayload));
+            }
+        }
+    }
+
+    private void handleGroupPullOffline(Channel ch, Long fromUserId, JsonNode node) throws Exception {
+        if (fromUserId == null) {
+            sendError(ch, "UNAUTHORIZED", "user not bound");
+            return;
+        }
+        long groupId = node.path("groupId").asLong(0L);
+        if (groupId <= 0) {
+            sendError(ch, "INVALID_PARAM", "groupId must be greater than 0");
+            return;
+        }
+        if (groupService == null || groupMessageService == null) {
+            sendError(ch, "INTERNAL_ERROR", "group message service unavailable");
+            return;
+        }
+        if (!groupService.isActiveMember(groupId, fromUserId)) {
+            sendError(ch, "FORBIDDEN", "user is not active group member");
+            return;
+        }
+
+        int defaultLimit = nettyProperties.getSyncBatchSize() > 0 ? nettyProperties.getSyncBatchSize() : DEFAULT_GROUP_PULL_LIMIT;
+        int limit = node.has("limit") ? node.path("limit").asInt(defaultLimit) : defaultLimit;
+        int maxLimit = nettyProperties.getOfflinePullMaxLimit() > 0 ? nettyProperties.getOfflinePullMaxLimit() : DEFAULT_PULL_MAX_LIMIT;
+        if (limit < 1 || limit > maxLimit) {
+            sendError(ch, "INVALID_PARAM", "limit must be between 1 and " + maxLimit);
+            return;
+        }
+        Long cursorSeq = node.has("cursorSeq") && !node.get("cursorSeq").isNull() ? node.get("cursorSeq").asLong() : null;
+        if (cursorSeq != null && cursorSeq < 0L) {
+            sendError(ch, "INVALID_PARAM", "cursorSeq must be greater than or equal to 0");
+            return;
+        }
+
+        GroupMessageService.PullResult pullResult = groupMessageService.pullOffline(groupId, fromUserId, cursorSeq, limit);
+
+        ObjectNode resp = mapper.createObjectNode();
+        resp.put("type", "GROUP_PULL_OFFLINE_RESULT");
+        resp.put("groupId", groupId);
+        resp.put("hasMore", pullResult.isHasMore());
+        resp.put("nextCursorSeq", pullResult.getNextCursorSeq());
+        ArrayNode messages = mapper.createArrayNode();
+        for (GroupMessageDO message : pullResult.getMessages()) {
+            ObjectNode item = mapper.createObjectNode();
+            item.put("type", "TEXT");
+            item.put("groupId", message.getGroupId());
+            item.put("seq", message.getSeq());
+            item.put("serverMsgId", message.getServerMsgId());
+            item.put("fromUserId", message.getFromUserId());
+            item.put("content", message.getContent());
+            item.put("createdAt", formatAsInstant(message.getCreatedAt()));
+            messages.add(item);
+        }
+        resp.set("messages", messages);
+        ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(resp)));
+    }
+
+    private String buildGroupPushPayload(GroupMessageDO message) throws Exception {
+        ObjectNode push = mapper.createObjectNode();
+        push.put("type", "GROUP_MSG_PUSH");
+        push.put("groupId", message.getGroupId());
+        push.put("seq", message.getSeq());
+        push.put("serverMsgId", message.getServerMsgId());
+        push.put("fromUserId", message.getFromUserId());
+        push.put("content", message.getContent());
+        push.put("createdAt", formatAsInstant(message.getCreatedAt()));
+        return mapper.writeValueAsString(push);
     }
 
     /**
