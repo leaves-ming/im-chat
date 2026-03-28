@@ -4,6 +4,7 @@ import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.service.AuthService;
+import com.ming.imchatserver.service.ContactService;
 import com.ming.imchatserver.service.GroupMessageService;
 import com.ming.imchatserver.service.GroupService;
 import io.netty.channel.ChannelInitializer;
@@ -13,6 +14,8 @@ import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
 import io.netty.handler.stream.ChunkedWriteHandler;
 import io.netty.handler.timeout.IdleStateHandler;
+
+import java.util.concurrent.Executor;
 /**
  * Netty channel initializer: 支持 HTTP (REST) 与 WebSocket 单端口复用
  */
@@ -23,10 +26,13 @@ import io.netty.handler.timeout.IdleStateHandler;
     private final AuthService authService;
     private final ChannelUserManager channelUserManager;
     private final com.ming.imchatserver.service.MessageService messageService;
+    private final ContactService contactService;
     private final GroupService groupService;
     private final GroupMessageService groupMessageService;
     private final DeliveryMapper deliveryMapper;
     private final MetricsService metricsService;
+    private final Executor groupPushExecutor;
+    private final GroupPushCoordinator groupPushCoordinator;
     /**
      * 创建 Channel 初始化器，并注入各业务 Handler 所需依赖。
      */
@@ -35,18 +41,24 @@ import io.netty.handler.timeout.IdleStateHandler;
                                   AuthService authService,
                                   ChannelUserManager channelUserManager,
                                   com.ming.imchatserver.service.MessageService messageService,
+                                  ContactService contactService,
                                   GroupService groupService,
                                   GroupMessageService groupMessageService,
                                   DeliveryMapper deliveryMapper,
-                                  MetricsService metricsService) {
+                                  MetricsService metricsService,
+                                  Executor groupPushExecutor,
+                                  GroupPushCoordinator groupPushCoordinator) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
         this.messageService = messageService;
+        this.contactService = contactService;
         this.groupService = groupService;
         this.groupMessageService = groupMessageService;
         this.deliveryMapper = deliveryMapper;
         this.metricsService = metricsService;
+        this.groupPushExecutor = groupPushExecutor;
+        this.groupPushCoordinator = groupPushCoordinator;
     }
 
     @Override
@@ -73,7 +85,7 @@ import io.netty.handler.timeout.IdleStateHandler;
         ch.pipeline().addLast(new WebSocketServerProtocolHandler(properties.getWebsocketPath(), null, true, properties.getMaxContentLength()));
         // 业务帧鉴权（要求 channel 已绑定 userId）
         ch.pipeline().addLast(new WsBusinessAuthHandler(channelUserManager));
-        ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, messageService, groupService, groupMessageService, properties, deliveryMapper, metricsService));
+        ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, properties, deliveryMapper, metricsService, groupPushExecutor, groupPushCoordinator));
         ch.pipeline().addLast(new IdleEventHandler(channelUserManager));
     }
 }

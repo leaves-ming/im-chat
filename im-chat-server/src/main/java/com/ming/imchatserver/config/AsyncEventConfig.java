@@ -31,4 +31,17 @@ public class AsyncEventConfig {
         executor.initialize();
         return executor;
     }
+
+    @Bean(name = "groupPushExecutor")
+    public Executor groupPushExecutor(NettyProperties properties) {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        int parallelism = properties.getGroupPushParallelism() > 0 ? properties.getGroupPushParallelism() : 4;
+        int queueCapacity = properties.getGroupPushQueueCapacity() > 0 ? properties.getGroupPushQueueCapacity() : 1000;
+        executor.setCorePoolSize(parallelism);
+        executor.setMaxPoolSize(parallelism);
+        executor.setQueueCapacity(queueCapacity);
+        executor.setThreadNamePrefix("im-group-push-");
+        executor.initialize();
+        return executor;
+    }
 }

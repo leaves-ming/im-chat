@@ -5,11 +5,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ming.imchatserver.config.NettyProperties;
+import com.ming.imchatserver.dao.ContactDO;
 import com.ming.imchatserver.dao.GroupMemberDO;
 import com.ming.imchatserver.dao.GroupMessageDO;
 import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.metrics.MetricsService;
+import com.ming.imchatserver.sensitive.SensitiveWordHitException;
+import com.ming.imchatserver.service.ContactService;
 import com.ming.imchatserver.service.GroupBizException;
 import com.ming.imchatserver.service.GroupMessageService;
 import com.ming.imchatserver.service.GroupService;
@@ -26,14 +29,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 /**
  * WebSocket 业务主处理器。
  * <p>
  * 职责：
  * - 处理握手完成后的用户绑定与重连同步；
- * - 处理文本业务指令（CHAT / ACK_REPORT / PULL_OFFLINE）；
+ * - 处理文本业务指令（CHAT / ACK_REPORT / PULL_OFFLINE / CONTACT_*）；
  * - 处理心跳帧与连接关闭事件；
  * - 将发送消息的“落库”和“推送”通过事件机制解耦。
  */
@@ -43,15 +50,20 @@ import java.util.List;
     private static final Logger logger = LoggerFactory.getLogger(WebSocketFrameHandler.class);
     private static final int DEFAULT_PULL_MAX_LIMIT = 200;
     private static final int DEFAULT_GROUP_PULL_LIMIT = 50;
+    private static final int DEFAULT_CONTACT_LIST_LIMIT = 50;
+    private static final int DEFAULT_GROUP_PUSH_BATCH_SIZE = 200;
 
     private final ChannelUserManager channelUserManager;
     private final ObjectMapper mapper = new ObjectMapper();
     private final MessageService messageService;
+    private final ContactService contactService;
     private final GroupService groupService;
     private final GroupMessageService groupMessageService;
     private final NettyProperties nettyProperties;
     private final DeliveryMapper deliveryMapper;
     private final MetricsService metricsService;
+    private final Executor groupPushExecutor;
+    private final GroupPushCoordinator groupPushCoordinator;
     /**
      * @param channelUserManager 在线连接管理器
      * @param messageService     消息服务（落库、状态更新、分页拉取）
@@ -61,18 +73,47 @@ import java.util.List;
     
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
                                  MessageService messageService,
+                                 ContactService contactService,
                                  GroupService groupService,
                                  GroupMessageService groupMessageService,
                                  NettyProperties nettyProperties,
                                  DeliveryMapper deliveryMapper,
                                  MetricsService metricsService) {
+        this(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService, null, null);
+    }
+
+    public WebSocketFrameHandler(ChannelUserManager channelUserManager,
+                                 MessageService messageService,
+                                 ContactService contactService,
+                                 GroupService groupService,
+                                 GroupMessageService groupMessageService,
+                                 NettyProperties nettyProperties,
+                                 DeliveryMapper deliveryMapper,
+                                 MetricsService metricsService,
+                                 Executor groupPushExecutor) {
+        this(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService, groupPushExecutor, null);
+    }
+
+    public WebSocketFrameHandler(ChannelUserManager channelUserManager,
+                                 MessageService messageService,
+                                 ContactService contactService,
+                                 GroupService groupService,
+                                 GroupMessageService groupMessageService,
+                                 NettyProperties nettyProperties,
+                                 DeliveryMapper deliveryMapper,
+                                 MetricsService metricsService,
+                                 Executor groupPushExecutor,
+                                 GroupPushCoordinator groupPushCoordinator) {
         this.channelUserManager = channelUserManager;
         this.messageService = messageService;
+        this.contactService = contactService;
         this.groupService = groupService;
         this.groupMessageService = groupMessageService;
         this.nettyProperties = nettyProperties;
         this.deliveryMapper = deliveryMapper;
         this.metricsService = metricsService;
+        this.groupPushExecutor = groupPushExecutor;
+        this.groupPushCoordinator = groupPushCoordinator;
     }
 
     /**
@@ -82,7 +123,7 @@ import java.util.List;
                                  MessageService messageService,
                                  NettyProperties nettyProperties,
                                  DeliveryMapper deliveryMapper) {
-        this(channelUserManager, messageService, null, null, nettyProperties, deliveryMapper, null);
+        this(channelUserManager, messageService, null, null, null, nettyProperties, deliveryMapper, null, null, null);
     }
 
     @Override
@@ -190,8 +231,11 @@ import java.util.List;
             String type = node.path("type").asText();
             switch (type) {
                 case "CHAT" -> handleChat(ch, fromUserId, node);
-                case "DELIVER_ACK_REPORT", "READ_ACK_REPORT", "ACK_REPORT" -> handleAckReport(ch, node, type);
+                case "ACK_REPORT" -> handleAckReport(ch, node);
                 case "PULL_OFFLINE" -> handlePullOffline(ch, fromUserId, node);
+                case "CONTACT_ADD" -> handleContactAdd(ch, fromUserId, node);
+                case "CONTACT_REMOVE" -> handleContactRemove(ch, fromUserId, node);
+                case "CONTACT_LIST" -> handleContactList(ch, fromUserId, node);
                 case "GROUP_JOIN" -> handleGroupJoin(ch, fromUserId, node);
                 case "GROUP_QUIT" -> handleGroupQuit(ch, fromUserId, node);
                 case "GROUP_MEMBER_LIST" -> handleGroupMemberList(ch, fromUserId, node);
@@ -201,10 +245,112 @@ import java.util.List;
             }
         } catch (GroupBizException ex) {
             sendError(ch, ex.getCode().name(), ex.getMessage());
+        } catch (SensitiveWordHitException ex) {
+            sendError(ch, ex.getCode(), ex.getMessage());
         } catch (Exception ex) {
             logger.error("process text frame error", ex);
             sendError(ch, "INTERNAL_ERROR", "internal error");
         }
+    }
+
+    private void handleContactAdd(Channel ch, Long userId, JsonNode node) throws Exception {
+        if (userId == null) {
+            sendError(ch, "UNAUTHORIZED", "user not bound");
+            return;
+        }
+        if (contactService == null) {
+            sendError(ch, "INTERNAL_ERROR", "contact service unavailable");
+            return;
+        }
+
+        long peerUserId = node.path("peerUserId").asLong(0L);
+        if (!isValidContactPeer(userId, peerUserId)) {
+            sendError(ch, "INVALID_PARAM", "peerUserId must be greater than 0 and different from self");
+            return;
+        }
+
+        ContactService.Result result = contactService.addOrActivateContact(userId, peerUserId);
+        ObjectNode resp = mapper.createObjectNode();
+        resp.put("type", "CONTACT_ADD_RESULT");
+        resp.put("peerUserId", peerUserId);
+        resp.put("success", result.isSuccess());
+        resp.put("idempotent", result.isIdempotent());
+        ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(resp)));
+    }
+
+    private void handleContactRemove(Channel ch, Long userId, JsonNode node) throws Exception {
+        if (userId == null) {
+            sendError(ch, "UNAUTHORIZED", "user not bound");
+            return;
+        }
+        if (contactService == null) {
+            sendError(ch, "INTERNAL_ERROR", "contact service unavailable");
+            return;
+        }
+
+        long peerUserId = node.path("peerUserId").asLong(0L);
+        if (!isValidContactPeer(userId, peerUserId)) {
+            sendError(ch, "INVALID_PARAM", "peerUserId must be greater than 0 and different from self");
+            return;
+        }
+
+        ContactService.Result result = contactService.removeOrDeactivateContact(userId, peerUserId);
+        ObjectNode resp = mapper.createObjectNode();
+        resp.put("type", "CONTACT_REMOVE_RESULT");
+        resp.put("peerUserId", peerUserId);
+        resp.put("success", result.isSuccess());
+        resp.put("idempotent", result.isIdempotent());
+        ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(resp)));
+    }
+
+    private void handleContactList(Channel ch, Long userId, JsonNode node) throws Exception {
+        if (userId == null) {
+            sendError(ch, "UNAUTHORIZED", "user not bound");
+            return;
+        }
+        if (contactService == null) {
+            sendError(ch, "INTERNAL_ERROR", "contact service unavailable");
+            return;
+        }
+
+        int defaultLimit = DEFAULT_CONTACT_LIST_LIMIT;
+        int maxLimit = nettyProperties.getOfflinePullMaxLimit() > 0 ? nettyProperties.getOfflinePullMaxLimit() : DEFAULT_PULL_MAX_LIMIT;
+        int limit = node.has("limit") ? node.path("limit").asInt(defaultLimit) : defaultLimit;
+        if (limit < 1 || limit > maxLimit) {
+            sendError(ch, "INVALID_PARAM", "limit must be between 1 and " + maxLimit);
+            return;
+        }
+
+        Long cursorPeerUserId = node.has("cursorPeerUserId") && !node.get("cursorPeerUserId").isNull()
+                ? node.get("cursorPeerUserId").asLong()
+                : null;
+        if (cursorPeerUserId != null && cursorPeerUserId < 0L) {
+            sendError(ch, "INVALID_PARAM", "cursorPeerUserId must be greater than or equal to 0");
+            return;
+        }
+
+        ContactService.ContactPageResult page = contactService.listActiveContacts(userId, cursorPeerUserId, limit);
+        ObjectNode resp = mapper.createObjectNode();
+        resp.put("type", "CONTACT_LIST_RESULT");
+        resp.put("success", true);
+        resp.put("hasMore", page.isHasMore());
+        if (page.getNextCursor() == null) {
+            resp.putNull("nextCursor");
+        } else {
+            resp.put("nextCursor", page.getNextCursor());
+        }
+
+        ArrayNode items = mapper.createArrayNode();
+        for (ContactDO contact : page.getItems()) {
+            ObjectNode item = mapper.createObjectNode();
+            item.put("peerUserId", contact.getPeerUserId());
+            item.put("relationStatus", contact.getRelationStatus());
+            item.put("createdAt", formatAsInstant(contact.getCreatedAt()));
+            item.put("updatedAt", formatAsInstant(contact.getUpdatedAt()));
+            items.add(item);
+        }
+        resp.set("items", items);
+        ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(resp)));
     }
 
     private void handleGroupJoin(Channel ch, Long userId, JsonNode node) throws Exception {
@@ -332,12 +478,7 @@ import java.util.List;
         GroupMessageService.PersistResult persistResult = groupMessageService.persistTextMessage(groupId, fromUserId, clientMsgId, content);
         GroupMessageDO message = persistResult.getMessage();
 
-        String pushPayload = buildGroupPushPayload(message);
-        for (Long userId : groupService.listActiveMemberUserIds(groupId)) {
-            for (Channel targetChannel : channelUserManager.getChannels(userId)) {
-                targetChannel.writeAndFlush(new TextWebSocketFrame(pushPayload));
-            }
-        }
+        dispatchGroupPush(groupId, message);
     }
 
     private void handleGroupPullOffline(Channel ch, Long fromUserId, JsonNode node) throws Exception {
@@ -429,6 +570,10 @@ import java.util.List;
             return;
         }
         String normalizedClientMsgId = normalizeClientMsgId(node.path("clientMsgId").asText(null));
+        if (nettyProperties.isSingleChatRequireActiveContact() && !isSingleChatAllowedByContact(fromUserId, target)) {
+            sendError(ch, "FORBIDDEN", "single chat requires active bilateral contacts");
+            return;
+        }
 
         MessageDO msg = new MessageDO();
         msg.setClientMsgId(normalizedClientMsgId);
@@ -445,11 +590,16 @@ import java.util.List;
     /**
      * 处理接收端上报的送达/已读 ACK，并通知发送端消息状态变化。
      */
-    private void handleAckReport(Channel ch, JsonNode node, String reportType) throws Exception {
+    private void handleAckReport(Channel ch, JsonNode node) throws Exception {
         Long reporterUserId = ch.attr(NettyAttr.USER_ID).get();
         String serverMsgId = node.path("serverMsgId").asText(null);
         if (serverMsgId == null || serverMsgId.isBlank()) {
             sendError(ch, "INVALID_PARAM", "serverMsgId required");
+            return;
+        }
+        String targetStatus = node.path("status").asText(null);
+        if (!"DELIVERED".equals(targetStatus) && !"ACKED".equals(targetStatus)) {
+            sendError(ch, "INVALID_PARAM", "status must be DELIVERED or ACKED");
             return;
         }
         MessageDO m = messageService.findByServerMsgId(serverMsgId);
@@ -461,7 +611,6 @@ import java.util.List;
             sendError(ch, "FORBIDDEN", "not message recipient");
             return;
         }
-        String targetStatus = ("READ_ACK_REPORT".equals(reportType) || "ACK_REPORT".equals(reportType)) ? "READ" : "DELIVERED";
         int updated = messageService.updateStatusByServerMsgId(serverMsgId, targetStatus);
 
         ObjectNode resp = mapper.createObjectNode();
@@ -472,7 +621,7 @@ import java.util.List;
         ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(resp)));
         if (updated > 0) {
             Date now = new Date();
-            if ("READ".equals(targetStatus)) {
+            if ("ACKED".equals(targetStatus)) {
                 deliveryMapper.upsertAck(m.getId(), reporterUserId, now, now);
                 recordAckLatency(targetStatus, m.getCreatedAt(), now);
             } else {
@@ -496,6 +645,128 @@ import java.util.List;
             return;
         }
         metricsService.observeAckLatency(ackType, createdAt.getTime(), ackAt.getTime());
+    }
+
+    private void dispatchGroupPush(Long groupId, GroupMessageDO message) throws Exception {
+        List<Long> memberUserIds = groupService.listActiveMemberUserIds(groupId);
+        List<Channel> targetChannels = new ArrayList<>();
+        for (Long userId : memberUserIds) {
+            targetChannels.addAll(channelUserManager.getChannels(userId));
+        }
+
+        String pushPayload = buildGroupPushPayload(message);
+        int attemptedChannels = targetChannels.size();
+        if (metricsService != null) {
+            metricsService.incrementGroupPushAttempt(attemptedChannels);
+        }
+        if (attemptedChannels == 0) {
+            logger.info("group push skipped, no online channels groupId={} serverMsgId={}", groupId, message.getServerMsgId());
+            return;
+        }
+
+        int batchSize = nettyProperties.getGroupPushBatchSize() > 0 ? nettyProperties.getGroupPushBatchSize() : DEFAULT_GROUP_PUSH_BATCH_SIZE;
+        int batchCount = (attemptedChannels + batchSize - 1) / batchSize;
+        if (groupPushCoordinator == null) {
+            dispatchGroupPushInOrder(groupId, message.getServerMsgId(), targetChannels, pushPayload, attemptedChannels, batchSize, batchCount);
+            return;
+        }
+        logger.debug("group push enqueued in-order groupId={} serverMsgId={} channels={} batches={}",
+                groupId, message.getServerMsgId(), attemptedChannels, batchCount);
+        groupPushCoordinator.enqueue(groupId,
+                () -> dispatchGroupPushInOrder(groupId, message.getServerMsgId(), targetChannels, pushPayload, attemptedChannels, batchSize, batchCount));
+    }
+
+    private CompletableFuture<Void> dispatchGroupPushInOrder(Long groupId,
+                                                             String serverMsgId,
+                                                             List<Channel> targetChannels,
+                                                             String pushPayload,
+                                                             int attemptedChannels,
+                                                             int batchSize,
+                                                             int totalBatchCount) {
+        if (groupPushExecutor == null) {
+            pushGroupMessageInBatches(groupId, serverMsgId, targetChannels, pushPayload, batchSize);
+            return CompletableFuture.completedFuture(null);
+        }
+        List<CompletableFuture<Void>> batchFutures = new ArrayList<>();
+        int submittedBatchCount = 0;
+        for (int start = 0; start < attemptedChannels; start += batchSize) {
+            int end = Math.min(start + batchSize, attemptedChannels);
+            int batchStart = start;
+            int batchEnd = end;
+            int currentBatchNo = ++submittedBatchCount;
+            List<Channel> batchChannels = new ArrayList<>(targetChannels.subList(batchStart, batchEnd));
+            CompletableFuture<Void> batchFuture = new CompletableFuture<>();
+            Runnable dispatchTask = () -> {
+                try {
+                    pushGroupMessageBatch(groupId, serverMsgId, currentBatchNo, batchChannels, pushPayload);
+                } finally {
+                    batchFuture.complete(null);
+                }
+            };
+            try {
+                groupPushExecutor.execute(dispatchTask);
+                batchFutures.add(batchFuture);
+            } catch (RejectedExecutionException ex) {
+                if (metricsService != null) {
+                    metricsService.incrementGroupPushReject();
+                }
+                logger.warn("group push executor rejected, skip realtime batch groupId={} serverMsgId={} batchNo={} batchSize={} attemptedChannels={}",
+                        groupId, serverMsgId, currentBatchNo, batchChannels.size(), attemptedChannels, ex);
+            }
+        }
+        logger.info("group push scheduled in-order groupId={} serverMsgId={} channels={} batches={} batchSize={}",
+                groupId, serverMsgId, attemptedChannels, totalBatchCount, batchSize);
+        return batchFutures.isEmpty()
+                ? CompletableFuture.completedFuture(null)
+                : CompletableFuture.allOf(batchFutures.toArray(new CompletableFuture[0]));
+    }
+
+    private void pushGroupMessageInBatches(Long groupId, String serverMsgId, List<Channel> targetChannels, String payload, int batchSize) {
+        int total = targetChannels.size();
+        int batchCount = 0;
+        for (int start = 0; start < total; start += batchSize) {
+            int end = Math.min(start + batchSize, total);
+            batchCount++;
+            pushGroupMessageBatch(groupId, serverMsgId, batchCount, new ArrayList<>(targetChannels.subList(start, end)), payload);
+        }
+        logger.info("group push dispatched groupId={} serverMsgId={} channels={} batches={} batchSize={}",
+                groupId, serverMsgId, total, batchCount, batchSize);
+    }
+
+    private void pushGroupMessageBatch(Long groupId, String serverMsgId, int batchNo, List<Channel> batchChannels, String payload) {
+        for (Channel targetChannel : batchChannels) {
+            try {
+                targetChannel.writeAndFlush(new TextWebSocketFrame(payload)).addListener(future -> {
+                    if (!future.isSuccess()) {
+                        recordGroupPushFailure(groupId, serverMsgId, targetChannel, future.cause());
+                    }
+                });
+            } catch (Exception ex) {
+                recordGroupPushFailure(groupId, serverMsgId, targetChannel, ex);
+            }
+        }
+        logger.debug("group push batch dispatched groupId={} serverMsgId={} batchNo={} channels={}",
+                groupId, serverMsgId, batchNo, batchChannels.size());
+    }
+
+    private void recordGroupPushFailure(Long groupId, String serverMsgId, Channel channel, Throwable cause) {
+        if (metricsService != null) {
+            metricsService.incrementGroupPushFail();
+        }
+        logger.warn("group push failed groupId={} serverMsgId={} channel={}",
+                groupId, serverMsgId, channel == null ? "null" : channel.id(), cause);
+    }
+
+    private boolean isSingleChatAllowedByContact(Long fromUserId, Long toUserId) {
+        if (contactService == null) {
+            return true;
+        }
+        return contactService.isActiveContact(fromUserId, toUserId)
+                && contactService.isActiveContact(toUserId, fromUserId);
+    }
+
+    private boolean isValidContactPeer(Long ownerUserId, long peerUserId) {
+        return peerUserId > 0L && ownerUserId != null && !ownerUserId.equals(peerUserId);
     }
 
     /**

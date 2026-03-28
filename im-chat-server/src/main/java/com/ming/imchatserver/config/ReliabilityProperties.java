@@ -17,6 +17,8 @@ public class ReliabilityProperties {
     private int relayBatchSize = 100;
     /** Relay 固定延迟（毫秒）。 */
     private long relayFixedDelayMs = 1000L;
+    /** PROCESSING 超时阈值（毫秒），超过后回收到 FAILED。 */
+    private long processingTimeoutMs = 30000L;
     /** 最大重试次数，超过进入 DLQ。 */
     private int maxRetryCount = 8;
     /** 分发 topic。 */

@@ -42,4 +42,12 @@ public class NettyProperties {
     private int syncBatchSize = 50;
     /** 离线拉取单次最大条数。 */
     private int offlinePullMaxLimit = 200;
+    /** 单聊是否要求双方存在 ACTIVE 联系关系（默认关闭，兼容旧逻辑）。 */
+    private boolean singleChatRequireActiveContact = false;
+    /** 群推送单批最大 channel 数，避免单次大群写满调度线程。 */
+    private int groupPushBatchSize = 200;
+    /** 群推送调度并行度（线程池 core/max）。 */
+    private int groupPushParallelism = 4;
+    /** 群推送调度队列容量。 */
+    private int groupPushQueueCapacity = 1000;
 }

@@ -20,14 +20,18 @@ public class MetricsService {
     private static final Logger logger = LoggerFactory.getLogger(MetricsService.class);
 
     private static final String ACK_TYPE_DELIVERED = "DELIVERED";
-    private static final String ACK_TYPE_READ = "READ";
+    private static final String ACK_TYPE_ACKED = "ACKED";
 
     private final OutboxMapper outboxMapper;
     private final AtomicLong outboxBacklog = new AtomicLong(0L);
+    private final AtomicLong outboxProcessingBacklog = new AtomicLong(0L);
     private final AtomicLong relaySendTotal = new AtomicLong(0L);
     private final AtomicLong relayFailTotal = new AtomicLong(0L);
+    private final AtomicLong groupPushAttemptTotal = new AtomicLong(0L);
+    private final AtomicLong groupPushFailTotal = new AtomicLong(0L);
+    private final AtomicLong groupPushRejectTotal = new AtomicLong(0L);
     private final SlidingWindowLatency deliveredLatencyWindow = new SlidingWindowLatency(4096);
-    private final SlidingWindowLatency readLatencyWindow = new SlidingWindowLatency(4096);
+    private final SlidingWindowLatency ackedLatencyWindow = new SlidingWindowLatency(4096);
 
     public MetricsService(OutboxMapper outboxMapper) {
         this.outboxMapper = outboxMapper;
@@ -41,18 +45,36 @@ public class MetricsService {
         relayFailTotal.incrementAndGet();
     }
 
+    public void incrementGroupPushAttempt() {
+        groupPushAttemptTotal.incrementAndGet();
+    }
+
+    public void incrementGroupPushAttempt(long delta) {
+        if (delta > 0) {
+            groupPushAttemptTotal.addAndGet(delta);
+        }
+    }
+
+    public void incrementGroupPushFail() {
+        groupPushFailTotal.incrementAndGet();
+    }
+
+    public void incrementGroupPushReject() {
+        groupPushRejectTotal.incrementAndGet();
+    }
+
     /**
-     * 记录 ACK 延迟，延迟值单位毫秒。
+     * 记录状态推进延迟，延迟值单位毫秒。
      * delivered latency = delivered_at - created_at
-     * read latency = read_at - created_at
+     * acked latency = acked_at - created_at
      */
     public void observeAckLatency(String ackType, long createdAtMs, long ackAtMs) {
         if (ackType == null || ackAtMs < createdAtMs) {
             return;
         }
         long latencyMs = ackAtMs - createdAtMs;
-        if (ACK_TYPE_READ.equalsIgnoreCase(ackType)) {
-            readLatencyWindow.record(latencyMs);
+        if (ACK_TYPE_ACKED.equalsIgnoreCase(ackType)) {
+            ackedLatencyWindow.record(latencyMs);
             return;
         }
         if (ACK_TYPE_DELIVERED.equalsIgnoreCase(ackType)) {
@@ -64,26 +86,33 @@ public class MetricsService {
         long sendTotal = relaySendTotal.get();
         long failTotal = relayFailTotal.get();
         double failRate = sendTotal <= 0 ? 0D : (double) failTotal / (double) sendTotal;
+        long groupAttemptTotal = groupPushAttemptTotal.get();
+        long groupFailTotal = groupPushFailTotal.get();
+        long groupRejectTotal = groupPushRejectTotal.get();
         long deliveredP95 = deliveredLatencyWindow.p95();
-        long readP95 = readLatencyWindow.p95();
+        long ackedP95 = ackedLatencyWindow.p95();
         return new MetricsSnapshot(
                 outboxBacklog.get(),
+                outboxProcessingBacklog.get(),
                 sendTotal,
                 failTotal,
                 failRate,
+                groupAttemptTotal,
+                groupFailTotal,
+                groupRejectTotal,
                 deliveredP95,
-                readP95
+                ackedP95
         );
     }
 
     /**
-     * 定时采样 outbox backlog（status in NEW/FAILED）。
+     * 定时采样 outbox backlog（status in NEW/FAILED/PROCESSING）。
      */
     @Scheduled(fixedDelayString = "${im.metrics.sample-fixed-delay-ms:10000}")
     public void sampleOutboxBacklog() {
         try {
-            long count = outboxMapper.countBacklog();
-            outboxBacklog.set(count);
+            outboxBacklog.set(outboxMapper.countBacklog());
+            outboxProcessingBacklog.set(outboxMapper.countProcessingBacklog());
         } catch (Exception ex) {
             logger.warn("sample outbox backlog failed", ex);
         }
@@ -95,13 +124,17 @@ public class MetricsService {
     @Scheduled(fixedDelayString = "${im.metrics.log-fixed-delay-ms:60000}")
     public void logMetrics() {
         MetricsSnapshot snapshot = snapshot();
-        logger.info("metrics im_outbox_backlog={} im_relay_send_total={} im_relay_fail_total={} im_relay_fail_rate={} im_ack_latency_ms{{type=DELIVERED,p95={}}} im_ack_latency_ms{{type=READ,p95={}}}",
+        logger.info("metrics im_outbox_backlog={} im_outbox_processing_backlog={} im_relay_send_total={} im_relay_fail_total={} im_relay_fail_rate={} im_group_push_attempt_total={} im_group_push_fail_total={} im_group_push_reject_total={} im_ack_latency_ms{{type=DELIVERED,p95={}}} im_ack_latency_ms{{type=ACKED,p95={}}}",
                 snapshot.getImOutboxBacklog(),
+                snapshot.getImOutboxProcessingBacklog(),
                 snapshot.getImRelaySendTotal(),
                 snapshot.getImRelayFailTotal(),
                 snapshot.getImRelayFailRate(),
+                snapshot.getImGroupPushAttemptTotal(),
+                snapshot.getImGroupPushFailTotal(),
+                snapshot.getImGroupPushRejectTotal(),
                 snapshot.getImAckLatencyDeliveredP95Ms(),
-                snapshot.getImAckLatencyReadP95Ms());
+                snapshot.getImAckLatencyAckedP95Ms());
     }
 
     /**
@@ -109,28 +142,44 @@ public class MetricsService {
      */
     public static class MetricsSnapshot {
         private final long imOutboxBacklog;
+        private final long imOutboxProcessingBacklog;
         private final long imRelaySendTotal;
         private final long imRelayFailTotal;
         private final double imRelayFailRate;
+        private final long imGroupPushAttemptTotal;
+        private final long imGroupPushFailTotal;
+        private final long imGroupPushRejectTotal;
         private final long imAckLatencyDeliveredP95Ms;
-        private final long imAckLatencyReadP95Ms;
+        private final long imAckLatencyAckedP95Ms;
 
         public MetricsSnapshot(long imOutboxBacklog,
+                               long imOutboxProcessingBacklog,
                                long imRelaySendTotal,
                                long imRelayFailTotal,
                                double imRelayFailRate,
+                               long imGroupPushAttemptTotal,
+                               long imGroupPushFailTotal,
+                               long imGroupPushRejectTotal,
                                long imAckLatencyDeliveredP95Ms,
-                               long imAckLatencyReadP95Ms) {
+                               long imAckLatencyAckedP95Ms) {
             this.imOutboxBacklog = imOutboxBacklog;
+            this.imOutboxProcessingBacklog = imOutboxProcessingBacklog;
             this.imRelaySendTotal = imRelaySendTotal;
             this.imRelayFailTotal = imRelayFailTotal;
             this.imRelayFailRate = imRelayFailRate;
+            this.imGroupPushAttemptTotal = imGroupPushAttemptTotal;
+            this.imGroupPushFailTotal = imGroupPushFailTotal;
+            this.imGroupPushRejectTotal = imGroupPushRejectTotal;
             this.imAckLatencyDeliveredP95Ms = imAckLatencyDeliveredP95Ms;
-            this.imAckLatencyReadP95Ms = imAckLatencyReadP95Ms;
+            this.imAckLatencyAckedP95Ms = imAckLatencyAckedP95Ms;
         }
 
         public long getImOutboxBacklog() {
             return imOutboxBacklog;
+        }
+
+        public long getImOutboxProcessingBacklog() {
+            return imOutboxProcessingBacklog;
         }
 
         public long getImRelaySendTotal() {
@@ -145,23 +194,39 @@ public class MetricsService {
             return imRelayFailRate;
         }
 
+        public long getImGroupPushAttemptTotal() {
+            return imGroupPushAttemptTotal;
+        }
+
+        public long getImGroupPushFailTotal() {
+            return imGroupPushFailTotal;
+        }
+
+        public long getImGroupPushRejectTotal() {
+            return imGroupPushRejectTotal;
+        }
+
         public long getImAckLatencyDeliveredP95Ms() {
             return imAckLatencyDeliveredP95Ms;
         }
 
-        public long getImAckLatencyReadP95Ms() {
-            return imAckLatencyReadP95Ms;
+        public long getImAckLatencyAckedP95Ms() {
+            return imAckLatencyAckedP95Ms;
         }
 
         public Map<String, Object> asMap() {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("im_outbox_backlog", imOutboxBacklog);
+            m.put("im_outbox_processing_backlog", imOutboxProcessingBacklog);
             m.put("im_relay_send_total", imRelaySendTotal);
             m.put("im_relay_fail_total", imRelayFailTotal);
             m.put("im_relay_fail_rate", imRelayFailRate);
+            m.put("im_group_push_attempt_total", imGroupPushAttemptTotal);
+            m.put("im_group_push_fail_total", imGroupPushFailTotal);
+            m.put("im_group_push_reject_total", imGroupPushRejectTotal);
             m.put("im_ack_latency_ms", Map.of(
                     "delivered_p95", imAckLatencyDeliveredP95Ms,
-                    "read_p95", imAckLatencyReadP95Ms
+                    "acked_p95", imAckLatencyAckedP95Ms
             ));
             return m;
         }

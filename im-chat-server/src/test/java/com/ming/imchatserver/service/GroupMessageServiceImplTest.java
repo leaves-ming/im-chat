@@ -3,6 +3,8 @@ package com.ming.imchatserver.service;
 import com.ming.imchatserver.dao.GroupMessageDO;
 import com.ming.imchatserver.mapper.GroupCursorMapper;
 import com.ming.imchatserver.mapper.GroupMessageMapper;
+import com.ming.imchatserver.sensitive.SensitiveWordHitException;
+import com.ming.imchatserver.sensitive.SensitiveWordService;
 import com.ming.imchatserver.service.impl.GroupMessageServiceImpl;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -29,7 +31,7 @@ class GroupMessageServiceImplTest {
     void persistTextMessageShouldRetryWhenSeqConflict() {
         GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
         GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
-        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper);
+        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, null);
 
         when(groupMessageMapper.findMaxSeq(101L)).thenReturn(9L, 10L);
         when(groupMessageMapper.insert(any(GroupMessageDO.class)))
@@ -51,7 +53,7 @@ class GroupMessageServiceImplTest {
     void pullOfflineShouldKeepAscAndAdvanceCursorWithHasMore() {
         GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
         GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
-        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper);
+        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, null);
 
         when(groupCursorMapper.findLastPullSeq(101L, 2L)).thenReturn(20L);
         when(groupMessageMapper.findAfterSeq(101L, 20L, 3)).thenReturn(List.of(
@@ -76,7 +78,7 @@ class GroupMessageServiceImplTest {
     void pullOfflineShouldPersistBaseCursorWhenNoNewMessages() {
         GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
         GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
-        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper);
+        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, null);
 
         when(groupCursorMapper.findLastPullSeq(101L, 2L)).thenReturn(35L);
         when(groupMessageMapper.findAfterSeq(101L, 35L, 3)).thenReturn(List.of());
@@ -87,6 +89,20 @@ class GroupMessageServiceImplTest {
         assertEquals(35L, result.getNextCursorSeq());
         assertEquals(0, result.getMessages().size());
         verify(groupCursorMapper).upsertLastPullSeq(101L, 2L, 35L);
+    }
+
+    @Test
+    void persistTextMessageShouldRejectSensitiveWordsBeforeInsert() {
+        GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
+        GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
+        SensitiveWordService sensitiveWordService = mock(SensitiveWordService.class);
+        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, sensitiveWordService);
+
+        org.mockito.Mockito.doThrow(new SensitiveWordHitException()).when(sensitiveWordService).validateTextOrThrow("badword");
+
+        org.junit.jupiter.api.Assertions.assertThrows(SensitiveWordHitException.class,
+                () -> service.persistTextMessage(101L, 1L, null, "badword"));
+        verify(groupMessageMapper, org.mockito.Mockito.never()).insert(any(GroupMessageDO.class));
     }
 
     private GroupMessageDO msg(Long seq, String rawContent) {

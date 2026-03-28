@@ -18,16 +18,16 @@ public interface OutboxMapper {
 
     @Insert("""
             INSERT INTO im_message_outbox
-            (event_id, message_id, topic, tag, payload, status, retry_count, next_retry_at)
+            (event_id, message_id, topic, tag, payload, status, retry_count, next_retry_at, processing_at)
             VALUES
-            (#{eventId}, #{messageId}, #{topic}, #{tag}, #{payload}, #{status}, #{retryCount}, #{nextRetryAt})
+            (#{eventId}, #{messageId}, #{topic}, #{tag}, #{payload}, #{status}, #{retryCount}, #{nextRetryAt}, #{processingAt})
             """)
     int insert(OutboxMessageDO outboxMessageDO);
 
     @Select("""
             <script>
             SELECT id, event_id AS eventId, message_id AS messageId, topic, tag, payload, status,
-                   retry_count AS retryCount, next_retry_at AS nextRetryAt, sent_at AS sentAt,
+                   retry_count AS retryCount, next_retry_at AS nextRetryAt, processing_at AS processingAt, sent_at AS sentAt,
                    fail_reason AS failReason, created_at AS createdAt, updated_at AS updatedAt
             FROM im_message_outbox
             WHERE status IN (0, 2)
@@ -41,6 +41,7 @@ public interface OutboxMapper {
     @Update("""
             UPDATE im_message_outbox
             SET status = 4,
+                processing_at = #{now},
                 updated_at = NOW()
             WHERE id = #{id}
               AND status IN (0, 2)
@@ -51,6 +52,7 @@ public interface OutboxMapper {
     @Update("""
             UPDATE im_message_outbox
             SET status = 1,
+                processing_at = NULL,
                 sent_at = NOW(),
                 fail_reason = NULL,
                 updated_at = NOW()
@@ -64,6 +66,7 @@ public interface OutboxMapper {
             SET status = #{status},
                 retry_count = #{retryCount},
                 next_retry_at = #{nextRetryAt},
+                processing_at = NULL,
                 fail_reason = #{failReason},
                 updated_at = NOW()
             WHERE id = #{id}
@@ -78,7 +81,29 @@ public interface OutboxMapper {
     @Select("""
             SELECT COUNT(1)
             FROM im_message_outbox
-            WHERE status IN (0, 2)
+            WHERE status IN (0, 2, 4)
             """)
     long countBacklog();
+
+    @Select("""
+            SELECT COUNT(1)
+            FROM im_message_outbox
+            WHERE status = 4
+            """)
+    long countProcessingBacklog();
+
+    @Update("""
+            UPDATE im_message_outbox
+            SET status = 2,
+                next_retry_at = #{now},
+                processing_at = NULL,
+                fail_reason = 'processing timeout reclaimed',
+                updated_at = NOW()
+            WHERE status = 4
+              AND (
+                    (processing_at IS NOT NULL AND processing_at <= #{timeoutBefore})
+                 OR (processing_at IS NULL AND updated_at <= #{timeoutBefore})
+              )
+            """)
+    int reclaimTimeoutProcessing(@Param("timeoutBefore") Date timeoutBefore, @Param("now") Date now);
 }

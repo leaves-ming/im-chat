@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ming.imchatserver.dao.GroupMessageDO;
 import com.ming.imchatserver.mapper.GroupCursorMapper;
 import com.ming.imchatserver.mapper.GroupMessageMapper;
+import com.ming.imchatserver.sensitive.SensitiveWordService;
 import com.ming.imchatserver.service.GroupMessageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,15 +28,22 @@ public class GroupMessageServiceImpl implements GroupMessageService {
 
     private final GroupMessageMapper groupMessageMapper;
     private final GroupCursorMapper groupCursorMapper;
+    private final SensitiveWordService sensitiveWordService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public GroupMessageServiceImpl(GroupMessageMapper groupMessageMapper, GroupCursorMapper groupCursorMapper) {
+    public GroupMessageServiceImpl(GroupMessageMapper groupMessageMapper,
+                                   GroupCursorMapper groupCursorMapper,
+                                   SensitiveWordService sensitiveWordService) {
         this.groupMessageMapper = groupMessageMapper;
         this.groupCursorMapper = groupCursorMapper;
+        this.sensitiveWordService = sensitiveWordService;
     }
 
     @Override
     public PersistResult persistTextMessage(Long groupId, Long fromUserId, String clientMsgId, String content) {
+        if (sensitiveWordService != null) {
+            sensitiveWordService.validateTextOrThrow(content);
+        }
         for (int attempt = 1; attempt <= MAX_SEQ_ALLOCATE_RETRY; attempt++) {
             try {
                 return tryPersistTextMessage(groupId, fromUserId, clientMsgId, content);

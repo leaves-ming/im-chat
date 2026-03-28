@@ -4,6 +4,7 @@ import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.service.AuthService;
+import com.ming.imchatserver.service.ContactService;
 import com.ming.imchatserver.service.GroupMessageService;
 import com.ming.imchatserver.service.GroupService;
 import io.netty.bootstrap.ServerBootstrap;
@@ -14,11 +15,14 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+
 import java.net.InetSocketAddress;
+import java.util.concurrent.Executor;
 /**
  * Netty WebSocket 服务启动器。
  * <p>
@@ -33,10 +37,13 @@ public class NettyWebSocketServer {
     private final AuthService authService;
     private final ChannelUserManager channelUserManager;
     private final com.ming.imchatserver.service.MessageService messageService;
+    private final ContactService contactService;
     private final GroupService groupService;
     private final GroupMessageService groupMessageService;
     private final DeliveryMapper deliveryMapper;
     private final MetricsService metricsService;
+    private final Executor groupPushExecutor;
+    private final GroupPushCoordinator groupPushCoordinator;
 
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
@@ -55,18 +62,24 @@ public class NettyWebSocketServer {
                                 AuthService authService,
                                 ChannelUserManager channelUserManager,
                                 com.ming.imchatserver.service.MessageService messageService,
+                                ContactService contactService,
                                 GroupService groupService,
                                 GroupMessageService groupMessageService,
                                 DeliveryMapper deliveryMapper,
-                                MetricsService metricsService) {
+                                MetricsService metricsService,
+                                @Qualifier("groupPushExecutor") Executor groupPushExecutor,
+                                GroupPushCoordinator groupPushCoordinator) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
         this.messageService = messageService;
+        this.contactService = contactService;
         this.groupService = groupService;
         this.groupMessageService = groupMessageService;
         this.deliveryMapper = deliveryMapper;
         this.metricsService = metricsService;
+        this.groupPushExecutor = groupPushExecutor;
+        this.groupPushCoordinator = groupPushCoordinator;
     }
 
     @EventListener(ApplicationReadyEvent.class)    /**
@@ -82,7 +95,7 @@ public class NettyWebSocketServer {
         b.group(bossGroup, workerGroup)
                 .channel(NioServerSocketChannel.class)
                 .localAddress(new InetSocketAddress(properties.getPort()))
-                .childHandler(new NettyServerInitializer(properties, authService, channelUserManager, messageService, groupService, groupMessageService, deliveryMapper, metricsService));
+                .childHandler(new NettyServerInitializer(properties, authService, channelUserManager, messageService, contactService, groupService, groupMessageService, deliveryMapper, metricsService, groupPushExecutor, groupPushCoordinator));
         serverChannel = b.bind().sync().channel();
         logger.info("Netty server started and listening on {}", properties.getPort());
     }

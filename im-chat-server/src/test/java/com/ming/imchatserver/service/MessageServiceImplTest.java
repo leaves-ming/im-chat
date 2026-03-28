@@ -2,6 +2,8 @@ package com.ming.imchatserver.service;
 
 import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.mapper.MessageMapper;
+import com.ming.imchatserver.sensitive.SensitiveWordHitException;
+import com.ming.imchatserver.sensitive.SensitiveWordService;
 import com.ming.imchatserver.service.impl.MessageServiceImpl;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DuplicateKeyException;
@@ -9,7 +11,9 @@ import org.springframework.dao.DuplicateKeyException;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -69,5 +73,96 @@ class MessageServiceImplTest {
         assertEquals("existing-1", result.getServerMsgId());
         assertEquals(false, result.isCreatedNew());
         verify(mapper).findByFromUserIdAndClientMsgId(1L, "cid-1");
+    }
+
+    @Test
+    void statusMachineShouldRejectRollbackFromDeliveredToSent() {
+        MessageMapper mapper = mock(MessageMapper.class);
+        MessageServiceImpl service = new MessageServiceImpl(mapper);
+
+        MessageDO exist = new MessageDO();
+        exist.setServerMsgId("srv-1");
+        exist.setStatus("DELIVERED");
+        when(mapper.findByServerMsgId("srv-1")).thenReturn(exist);
+
+        int updated = service.updateStatusByServerMsgId("srv-1", "SENT");
+
+        assertEquals(0, updated);
+        verify(mapper, never()).updateStatusByServerMsgId(eq("srv-1"), eq("SENT"), any(), any());
+    }
+
+    @Test
+    void statusMachineShouldRejectRollbackFromAckedToDelivered() {
+        MessageMapper mapper = mock(MessageMapper.class);
+        MessageServiceImpl service = new MessageServiceImpl(mapper);
+
+        MessageDO exist = new MessageDO();
+        exist.setServerMsgId("srv-2");
+        exist.setStatus("ACKED");
+        when(mapper.findByServerMsgId("srv-2")).thenReturn(exist);
+
+        int updated = service.updateStatusByServerMsgId("srv-2", "DELIVERED");
+
+        assertEquals(0, updated);
+        verify(mapper, never()).updateStatusByServerMsgId(eq("srv-2"), eq("DELIVERED"), any(), any());
+    }
+
+    @Test
+    void statusMachineShouldRejectJumpFromSentToAcked() {
+        MessageMapper mapper = mock(MessageMapper.class);
+        MessageServiceImpl service = new MessageServiceImpl(mapper);
+
+        MessageDO exist = new MessageDO();
+        exist.setServerMsgId("srv-3");
+        exist.setStatus("SENT");
+        when(mapper.findByServerMsgId("srv-3")).thenReturn(exist);
+
+        int updated = service.updateStatusByServerMsgId("srv-3", "ACKED");
+
+        assertEquals(0, updated);
+        verify(mapper, never()).updateStatusByServerMsgId(eq("srv-3"), eq("ACKED"), any(), any());
+    }
+
+    @Test
+    void statusMachineShouldAllowSentToDeliveredAndDeliveredToAcked() {
+        MessageMapper mapper = mock(MessageMapper.class);
+        MessageServiceImpl service = new MessageServiceImpl(mapper);
+
+        MessageDO sent = new MessageDO();
+        sent.setServerMsgId("srv-4");
+        sent.setStatus("SENT");
+        when(mapper.findByServerMsgId("srv-4")).thenReturn(sent);
+        when(mapper.updateStatusByServerMsgId(eq("srv-4"), eq("DELIVERED"), any(), any())).thenReturn(1);
+
+        int deliveredUpdated = service.updateStatusByServerMsgId("srv-4", "DELIVERED");
+        assertEquals(1, deliveredUpdated);
+        verify(mapper).updateStatusByServerMsgId(eq("srv-4"), eq("DELIVERED"), any(), isNull());
+
+        MessageDO delivered = new MessageDO();
+        delivered.setServerMsgId("srv-5");
+        delivered.setStatus("DELIVERED");
+        when(mapper.findByServerMsgId("srv-5")).thenReturn(delivered);
+        when(mapper.updateStatusByServerMsgId(eq("srv-5"), eq("ACKED"), any(), any())).thenReturn(1);
+
+        int ackedUpdated = service.updateStatusByServerMsgId("srv-5", "ACKED");
+        assertEquals(1, ackedUpdated);
+        verify(mapper).updateStatusByServerMsgId(eq("srv-5"), eq("ACKED"), any(), any());
+    }
+
+    @Test
+    void persistMessageShouldRejectSensitiveWordsBeforeInsert() {
+        MessageMapper mapper = mock(MessageMapper.class);
+        SensitiveWordService sensitiveWordService = mock(SensitiveWordService.class);
+        MessageServiceImpl service = new MessageServiceImpl(mapper, null, null, sensitiveWordService);
+
+        MessageDO msg = new MessageDO();
+        msg.setFromUserId(1L);
+        msg.setToUserId(2L);
+        msg.setContent("badword");
+
+        org.mockito.Mockito.doThrow(new SensitiveWordHitException()).when(sensitiveWordService).validateTextOrThrow("badword");
+
+        org.junit.jupiter.api.Assertions.assertThrows(SensitiveWordHitException.class, () -> service.persistMessage(msg));
+        verify(mapper, never()).insert(any(MessageDO.class));
     }
 }

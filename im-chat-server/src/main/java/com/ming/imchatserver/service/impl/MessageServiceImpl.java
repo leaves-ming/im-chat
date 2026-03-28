@@ -9,6 +9,7 @@ import com.ming.imchatserver.dao.OutboxMessageDO;
 import com.ming.imchatserver.mapper.MessageMapper;
 import com.ming.imchatserver.mapper.OutboxMapper;
 import com.ming.imchatserver.mq.DispatchMessagePayload;
+import com.ming.imchatserver.sensitive.SensitiveWordService;
 import com.ming.imchatserver.service.MessageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,6 +38,7 @@ public class MessageServiceImpl implements MessageService {
     private final MessageMapper messageMapper;
     private final OutboxMapper outboxMapper;
     private final ReliabilityProperties reliabilityProperties;
+    private final SensitiveWordService sensitiveWordService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
@@ -45,24 +47,26 @@ public class MessageServiceImpl implements MessageService {
     @Autowired
     public MessageServiceImpl(MessageMapper messageMapper,
                               OutboxMapper outboxMapper,
-                              ReliabilityProperties reliabilityProperties) {
+                              ReliabilityProperties reliabilityProperties,
+                              SensitiveWordService sensitiveWordService) {
         this.messageMapper = messageMapper;
         this.outboxMapper = outboxMapper;
         this.reliabilityProperties = reliabilityProperties;
+        this.sensitiveWordService = sensitiveWordService;
     }
 
     /**
      * 单元测试兼容构造函数。
      */
     public MessageServiceImpl(MessageMapper messageMapper) {
-        this(messageMapper, null, null);
+        this(messageMapper, null, null, null);
     }
 
     /**
      * 单元测试兼容构造函数（含 outbox）。
      */
     public MessageServiceImpl(MessageMapper messageMapper, OutboxMapper outboxMapper) {
-        this(messageMapper, outboxMapper, null);
+        this(messageMapper, outboxMapper, null, null);
     }
 
     /**
@@ -74,6 +78,9 @@ public class MessageServiceImpl implements MessageService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public PersistResult persistMessage(MessageDO msg) {
+        if (sensitiveWordService != null) {
+            sensitiveWordService.validateTextOrThrow(msg == null ? null : msg.getContent());
+        }
         msg.setClientMsgId(normalizeClientMsgId(msg.getClientMsgId()));
 
         String serverMsgId = UUID.randomUUID().toString();
@@ -125,6 +132,7 @@ public class MessageServiceImpl implements MessageService {
             outbox.setStatus(OUTBOX_STATUS_NEW);
             outbox.setRetryCount(0);
             outbox.setNextRetryAt(new Date());
+            outbox.setProcessingAt(null);
 
             outboxMapper.insert(outbox);
         } catch (Exception ex) {
@@ -146,7 +154,7 @@ public class MessageServiceImpl implements MessageService {
     /**
      * 按状态机推进消息状态。
      * <p>
-     * 仅允许状态单向前进，不允许回退或重复更新。
+     * 仅允许状态单步前进，不允许回退、跳级或重复更新。
      */
     @Override
     public int updateStatusByServerMsgId(String serverMsgId, String status) {
@@ -166,7 +174,7 @@ public class MessageServiceImpl implements MessageService {
         }
 
         int curOrd = statusOrd(exist.getStatus());
-        if (targetOrd <= curOrd) {
+        if (targetOrd != curOrd + 1) {
             logger.debug("updateStatusByServerMsgId: serverMsgId={} currentStatus={} targetStatus={} no-op",
                     serverMsgId, exist.getStatus(), status);
             return 0;
@@ -202,7 +210,7 @@ public class MessageServiceImpl implements MessageService {
         return switch (up) {
             case "SENT" -> 1;
             case "DELIVERED" -> 2;
-            case "ACKED", "READ" -> 3;
+            case "ACKED" -> 3;
             default -> 0;
         };
     }

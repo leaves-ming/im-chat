@@ -72,6 +72,10 @@ im:
     max-content-length: 65536
     token-expire-seconds: 3600
     offline-pull-max-limit: 200
+    single-chat-require-active-contact: false
+    group-push-batch-size: 200
+    group-push-parallelism: 4
+    group-push-queue-capacity: 1000
     origin-check-enabled: false
     origin-whitelist:
       - http://localhost:5173
@@ -79,8 +83,13 @@ im:
   reliability:
     relay-batch-size: 100
     relay-fixed-delay-ms: 1000
+    processing-timeout-ms: 30000
     max-retry-count: 8
     dispatch-topic: im.msg.dispatch
+  sensitive:
+    enabled: false
+    mode: REJECT
+    word-source: classpath:sensitive_words.txt
   metrics:
     sample-fixed-delay-ms: 10000
     log-fixed-delay-ms: 60000

@@ -21,7 +21,7 @@ public class MessageDO {
     private Long toUserId;
     /** 消息内容。 */
     private String content;
-    /** 消息状态（SENT/DELIVERED/ACKED 等）。 */
+    /** 消息状态（SENT/DELIVERED/ACKED）。 */
     private String status;
     /** 创建时间。 */
     private Date createdAt;

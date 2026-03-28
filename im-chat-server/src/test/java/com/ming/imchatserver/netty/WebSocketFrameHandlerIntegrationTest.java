@@ -3,13 +3,19 @@ package com.ming.imchatserver.netty;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ming.imchatserver.config.NettyProperties;
+import com.ming.imchatserver.dao.ContactDO;
 import com.ming.imchatserver.dao.GroupMessageDO;
 import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.mapper.DeliveryMapper;
+import com.ming.imchatserver.metrics.MetricsService;
+import com.ming.imchatserver.netty.GroupPushCoordinator;
+import com.ming.imchatserver.sensitive.SensitiveWordHitException;
+import com.ming.imchatserver.service.ContactService;
 import com.ming.imchatserver.service.GroupMessageService;
 import com.ming.imchatserver.service.GroupService;
 import com.ming.imchatserver.service.MessageService;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelId;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.http.DefaultHttpHeaders;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
@@ -21,6 +27,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -45,9 +53,11 @@ class WebSocketFrameHandlerIntegrationTest {
 
     private ChannelUserManager channelUserManager;
     private MessageService messageService;
+    private ContactService contactService;
     private GroupService groupService;
     private GroupMessageService groupMessageService;
     private DeliveryMapper deliveryMapper;
+    private MetricsService metricsService;
     private NettyProperties nettyProperties;
 
     @BeforeEach
@@ -57,9 +67,11 @@ class WebSocketFrameHandlerIntegrationTest {
     void setUp() {
         channelUserManager = mock(ChannelUserManager.class);
         messageService = mock(MessageService.class);
+        contactService = mock(ContactService.class);
         groupService = mock(GroupService.class);
         groupMessageService = mock(GroupMessageService.class);
         deliveryMapper = mock(DeliveryMapper.class);
+        metricsService = mock(MetricsService.class);
         nettyProperties = new NettyProperties();
         nettyProperties.setSyncBatchSize(2);
         nettyProperties.setOfflinePullMaxLimit(200);
@@ -77,24 +89,65 @@ class WebSocketFrameHandlerIntegrationTest {
         saved.setFromUserId(10L);
         saved.setToUserId(20L);
         when(messageService.findByServerMsgId("srv-1")).thenReturn(saved);
-        when(messageService.updateStatusByServerMsgId("srv-1", "READ")).thenReturn(1, 0);
+        when(messageService.updateStatusByServerMsgId("srv-1", "ACKED")).thenReturn(1, 0);
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
         channel.attr(NettyAttr.USER_ID).set(20L);
 
-        String req = "{\"type\":\"ACK_REPORT\",\"serverMsgId\":\"srv-1\"}";
+        String req = "{\"type\":\"ACK_REPORT\",\"serverMsgId\":\"srv-1\",\"status\":\"ACKED\"}";
         channel.writeInbound(new TextWebSocketFrame(req));
         channel.writeInbound(new TextWebSocketFrame(req));
 
         List<JsonNode> selfOut = readOutboundJson(channel);
         assertEquals(2, selfOut.size());
         assertEquals("ACK_REPORT_RESULT", selfOut.get(0).get("type").asText());
+        assertEquals("ACKED", selfOut.get(0).get("status").asText());
         assertEquals(1, selfOut.get(0).get("updated").asInt());
         assertEquals(0, selfOut.get(1).get("updated").asInt());
 
         List<JsonNode> notifyOut = readOutboundJson(senderChannel);
         assertEquals(1, notifyOut.size());
         assertEquals("MSG_STATUS_NOTIFY", notifyOut.get(0).get("type").asText());
+        assertEquals("ACKED", notifyOut.get(0).get("status").asText());
+    }
+
+    @Test
+    void ackReportShouldMapToDeliveredStatus() throws Exception {
+        EmbeddedChannel senderChannel = new EmbeddedChannel();
+        when(channelUserManager.getChannels(10L)).thenReturn(List.of(senderChannel));
+
+        MessageDO saved = new MessageDO();
+        saved.setId(7L);
+        saved.setFromUserId(10L);
+        saved.setToUserId(20L);
+        saved.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
+        when(messageService.findByServerMsgId("srv-d")).thenReturn(saved);
+        when(messageService.updateStatusByServerMsgId("srv-d", "DELIVERED")).thenReturn(1);
+
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        channel.attr(NettyAttr.USER_ID).set(20L);
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"ACK_REPORT\",\"serverMsgId\":\"srv-d\",\"status\":\"DELIVERED\"}"));
+        JsonNode result = readOutboundJson(channel).get(0);
+        JsonNode notify = readOutboundJson(senderChannel).get(0);
+
+        assertEquals("ACK_REPORT_RESULT", result.get("type").asText());
+        assertEquals("DELIVERED", result.get("status").asText());
+        assertEquals("MSG_STATUS_NOTIFY", notify.get("type").asText());
+        assertEquals("DELIVERED", notify.get("status").asText());
+    }
+
+    @Test
+    void ackReportShouldRejectInvalidStatus() throws Exception {
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService));
+        channel.attr(NettyAttr.USER_ID).set(20L);
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"ACK_REPORT\",\"serverMsgId\":\"srv-bad\",\"status\":\"READ\"}"));
+        JsonNode error = readOutboundJson(channel).get(0);
+
+        assertEquals("ERROR", error.get("type").asText());
+        assertEquals("INVALID_PARAM", error.get("code").asText());
+        verify(messageService, never()).findByServerMsgId(any());
     }
 
     @Test
@@ -102,7 +155,7 @@ class WebSocketFrameHandlerIntegrationTest {
      * 方法说明。
      */
     void pullOfflineShouldSupportStableCursorPaginationAndValidateParams() throws Exception {
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
         channel.attr(NettyAttr.USER_ID).set(2L);
 
         Instant base = Instant.parse("2026-03-25T00:00:00Z");
@@ -154,7 +207,7 @@ class WebSocketFrameHandlerIntegrationTest {
      * 方法说明。
      */
     void reconnectSyncShouldUseAccurateHasMoreAndOnlyTriggerOnce() throws Exception {
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
         channel.attr(NettyAttr.USER_ID).set(100L);
         channel.attr(NettyAttr.AUTH_OK).set(Boolean.TRUE);
 
@@ -184,7 +237,7 @@ class WebSocketFrameHandlerIntegrationTest {
      * 方法说明。
      */
     void chatShouldNotPublishEventForIdempotentReplay() throws Exception {
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         when(messageService.persistMessage(any(MessageDO.class))).thenReturn(new MessageService.PersistResult("existing-1", false));
@@ -198,11 +251,150 @@ class WebSocketFrameHandlerIntegrationTest {
     }
 
     @Test
+    void chatShouldRejectWhenContactGuardEnabledAndNoBilateralActiveRelation() throws Exception {
+        nettyProperties.setSingleChatRequireActiveContact(true);
+        when(contactService.isActiveContact(1L, 2L)).thenReturn(true);
+        when(contactService.isActiveContact(2L, 1L)).thenReturn(false);
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        channel.attr(NettyAttr.USER_ID).set(1L);
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CHAT\",\"targetUserId\":2,\"content\":\"hello\"}"));
+        JsonNode error = readOutboundJson(channel).get(0);
+
+        assertEquals("ERROR", error.get("type").asText());
+        assertEquals("FORBIDDEN", error.get("code").asText());
+        verify(messageService, never()).persistMessage(any(MessageDO.class));
+    }
+
+    @Test
+    void chatShouldAllowWhenContactGuardDisabled() throws Exception {
+        nettyProperties.setSingleChatRequireActiveContact(false);
+        when(messageService.persistMessage(any(MessageDO.class))).thenReturn(new MessageService.PersistResult("srv-allow", true));
+
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        channel.attr(NettyAttr.USER_ID).set(1L);
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CHAT\",\"targetUserId\":2,\"content\":\"hello\"}"));
+        JsonNode resp = readOutboundJson(channel).get(0);
+
+        assertEquals("SERVER_ACK", resp.get("type").asText());
+        assertEquals("srv-allow", resp.get("serverMsgId").asText());
+        verify(contactService, never()).isActiveContact(anyLong(), anyLong());
+    }
+
+    @Test
+    void chatShouldRejectWhenSensitiveWordHit() throws Exception {
+        when(messageService.persistMessage(any(MessageDO.class))).thenThrow(new SensitiveWordHitException());
+
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(
+                channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService));
+        channel.attr(NettyAttr.USER_ID).set(1L);
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CHAT\",\"targetUserId\":2,\"content\":\"badword message\"}"));
+        JsonNode error = readOutboundJson(channel).get(0);
+
+        assertEquals("ERROR", error.get("type").asText());
+        assertEquals("SENSITIVE_WORD_HIT", error.get("code").asText());
+        verify(messageService).persistMessage(any(MessageDO.class));
+    }
+
+    @Test
+    void chatShouldAllowWhenSensitiveSwitchDisabled() throws Exception {
+        when(messageService.persistMessage(any(MessageDO.class))).thenReturn(new MessageService.PersistResult("srv-sensitive-off", true));
+
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(
+                channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService));
+        channel.attr(NettyAttr.USER_ID).set(1L);
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CHAT\",\"targetUserId\":2,\"content\":\"badword message\"}"));
+        JsonNode resp = readOutboundJson(channel).get(0);
+
+        assertEquals("SERVER_ACK", resp.get("type").asText());
+        assertEquals("srv-sensitive-off", resp.get("serverMsgId").asText());
+    }
+
+    @Test
+    void contactAddShouldReturnResultAndValidateParams() throws Exception {
+        when(contactService.addOrActivateContact(1L, 2L)).thenReturn(new ContactService.Result(true, false));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        channel.attr(NettyAttr.USER_ID).set(1L);
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CONTACT_ADD\",\"peerUserId\":2}"));
+        JsonNode result = readOutboundJson(channel).get(0);
+        assertEquals("CONTACT_ADD_RESULT", result.get("type").asText());
+        assertTrue(result.get("success").asBoolean());
+        assertFalse(result.get("idempotent").asBoolean());
+        assertEquals(2L, result.get("peerUserId").asLong());
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CONTACT_ADD\",\"peerUserId\":1}"));
+        JsonNode selfError = readOutboundJson(channel).get(0);
+        assertEquals("ERROR", selfError.get("type").asText());
+        assertEquals("INVALID_PARAM", selfError.get("code").asText());
+
+        EmbeddedChannel unauthorized = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        unauthorized.writeInbound(new TextWebSocketFrame("{\"type\":\"CONTACT_ADD\",\"peerUserId\":2}"));
+        JsonNode unauthorizedError = readOutboundJson(unauthorized).get(0);
+        assertEquals("UNAUTHORIZED", unauthorizedError.get("code").asText());
+    }
+
+    @Test
+    void contactRemoveShouldReturnIdempotentResult() throws Exception {
+        when(contactService.removeOrDeactivateContact(1L, 2L)).thenReturn(new ContactService.Result(true, true));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        channel.attr(NettyAttr.USER_ID).set(1L);
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CONTACT_REMOVE\",\"peerUserId\":2}"));
+        JsonNode result = readOutboundJson(channel).get(0);
+
+        assertEquals("CONTACT_REMOVE_RESULT", result.get("type").asText());
+        assertTrue(result.get("success").asBoolean());
+        assertTrue(result.get("idempotent").asBoolean());
+        assertEquals(2L, result.get("peerUserId").asLong());
+    }
+
+    @Test
+    void contactListShouldReturnPageAndValidateParams() throws Exception {
+        ContactDO c1 = contact(1L, 2L, 1, "2026-03-25T00:00:00Z");
+        ContactDO c2 = contact(1L, 3L, 1, "2026-03-25T00:00:01Z");
+        when(contactService.listActiveContacts(1L, 0L, 2))
+                .thenReturn(new ContactService.ContactPageResult(List.of(c1, c2), 3L, true));
+        when(contactService.listActiveContacts(1L, 3L, 2))
+                .thenReturn(new ContactService.ContactPageResult(List.of(), null, false));
+
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        channel.attr(NettyAttr.USER_ID).set(1L);
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CONTACT_LIST\",\"limit\":2,\"cursorPeerUserId\":0}"));
+        JsonNode first = readOutboundJson(channel).get(0);
+        assertEquals("CONTACT_LIST_RESULT", first.get("type").asText());
+        assertTrue(first.get("success").asBoolean());
+        assertTrue(first.get("hasMore").asBoolean());
+        assertEquals(3L, first.get("nextCursor").asLong());
+        assertEquals(2, first.get("items").size());
+        assertEquals(2L, first.get("items").get(0).get("peerUserId").asLong());
+        assertEquals(1, first.get("items").get(0).get("relationStatus").asInt());
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CONTACT_LIST\",\"limit\":2,\"cursorPeerUserId\":3}"));
+        JsonNode second = readOutboundJson(channel).get(0);
+        assertFalse(second.get("hasMore").asBoolean());
+        assertTrue(second.get("items").isEmpty());
+        assertTrue(second.get("nextCursor").isNull());
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CONTACT_LIST\",\"limit\":0}"));
+        JsonNode invalidLimit = readOutboundJson(channel).get(0);
+        assertEquals("INVALID_PARAM", invalidLimit.get("code").asText());
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CONTACT_LIST\",\"limit\":2,\"cursorPeerUserId\":-1}"));
+        JsonNode invalidCursor = readOutboundJson(channel).get(0);
+        assertEquals("INVALID_PARAM", invalidCursor.get("code").asText());
+    }
+
+    @Test
     /**
      * 方法说明。
      */
     void chatValidationShouldRejectInvalidTargetAndBlankContent() throws Exception {
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CHAT\",\"targetUserId\":0,\"content\":\"hello\"}"));
@@ -233,10 +425,10 @@ class WebSocketFrameHandlerIntegrationTest {
         saved.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
         when(messageService.findByServerMsgId("srv-x")).thenReturn(saved);
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
         channel.attr(NettyAttr.USER_ID).set(30L);
 
-        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"ACK_REPORT\",\"serverMsgId\":\"srv-x\"}"));
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"ACK_REPORT\",\"serverMsgId\":\"srv-x\",\"status\":\"ACKED\"}"));
 
         List<JsonNode> out = readOutboundJson(channel);
         assertEquals(1, out.size());
@@ -255,7 +447,7 @@ class WebSocketFrameHandlerIntegrationTest {
      */
     void groupJoinShouldReturnIdempotentResult() throws Exception {
         when(groupService.joinGroup(101L, 1L)).thenReturn(new GroupService.JoinGroupResult(true, true));
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_JOIN\",\"groupId\":101}"));
@@ -273,7 +465,7 @@ class WebSocketFrameHandlerIntegrationTest {
      */
     void groupQuitShouldReturnIdempotentResult() throws Exception {
         when(groupService.quitGroup(101L, 1L)).thenReturn(new GroupService.QuitGroupResult(true, true));
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_QUIT\",\"groupId\":101}"));
@@ -304,7 +496,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupMessageService.persistTextMessage(101L, 1L, "c-1", "hello-group"))
                 .thenReturn(new GroupMessageService.PersistResult(saved));
 
-        EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService));
         senderChannel.attr(NettyAttr.USER_ID).set(1L);
 
         senderChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_CHAT\",\"groupId\":101,\"clientMsgId\":\"c-1\",\"content\":\"hello-group\"}"));
@@ -317,12 +509,229 @@ class WebSocketFrameHandlerIntegrationTest {
         assertEquals(101L, pushed1.get(0).get("groupId").asLong());
         assertEquals(7L, pushed1.get(0).get("seq").asLong());
         assertEquals("hello-group", pushed1.get(0).get("content").asText());
+        verify(metricsService).incrementGroupPushAttempt(2L);
+    }
+
+    @Test
+    void groupChatShouldRejectWhenSensitiveWordHit() throws Exception {
+        when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
+        when(groupMessageService.persistTextMessage(101L, 1L, null, "testban group")).thenThrow(new SensitiveWordHitException());
+
+        EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(
+                channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService));
+        senderChannel.attr(NettyAttr.USER_ID).set(1L);
+
+        senderChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_CHAT\",\"groupId\":101,\"content\":\"testban group\"}"));
+        JsonNode error = readOutboundJson(senderChannel).get(0);
+
+        assertEquals("ERROR", error.get("type").asText());
+        assertEquals("SENSITIVE_WORD_HIT", error.get("code").asText());
+        verify(groupMessageService).persistTextMessage(101L, 1L, null, "testban group");
+    }
+
+    @Test
+    void groupChatShouldSubmitBatchesSeparatelyToExecutor() throws Exception {
+        nettyProperties.setGroupPushBatchSize(2);
+
+        EmbeddedChannel user1Channel = new EmbeddedChannel();
+        EmbeddedChannel user2Channel = new EmbeddedChannel();
+        EmbeddedChannel user3Channel = new EmbeddedChannel();
+        when(channelUserManager.getChannels(1L)).thenReturn(List.of(user1Channel));
+        when(channelUserManager.getChannels(2L)).thenReturn(List.of(user2Channel));
+        when(channelUserManager.getChannels(3L)).thenReturn(List.of(user3Channel));
+        when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
+        when(groupService.listActiveMemberUserIds(101L)).thenReturn(List.of(1L, 2L, 3L));
+
+        GroupMessageDO saved = new GroupMessageDO();
+        saved.setGroupId(101L);
+        saved.setSeq(10L);
+        saved.setServerMsgId("g-srv-10");
+        saved.setFromUserId(1L);
+        saved.setContent("parallel-batch");
+        saved.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
+        when(groupMessageService.persistTextMessage(101L, 1L, null, "parallel-batch"))
+                .thenReturn(new GroupMessageService.PersistResult(saved));
+
+        List<Runnable> submittedTasks = new ArrayList<>();
+        EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(
+                channelUserManager,
+                messageService,
+                contactService,
+                groupService,
+                groupMessageService,
+                nettyProperties,
+                deliveryMapper,
+                metricsService,
+                submittedTasks::add
+        ));
+        senderChannel.attr(NettyAttr.USER_ID).set(1L);
+
+        senderChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_CHAT\",\"groupId\":101,\"content\":\"parallel-batch\"}"));
+
+        assertEquals(2, submittedTasks.size());
+        assertTrue(readOutboundJson(user1Channel).isEmpty());
+        assertTrue(readOutboundJson(user2Channel).isEmpty());
+        assertTrue(readOutboundJson(user3Channel).isEmpty());
+
+        submittedTasks.forEach(Runnable::run);
+
+        assertEquals(1, readOutboundJson(user1Channel).size());
+        assertEquals(1, readOutboundJson(user2Channel).size());
+        assertEquals(1, readOutboundJson(user3Channel).size());
+        verify(metricsService).incrementGroupPushAttempt(3L);
+    }
+
+    @Test
+    void groupChatShouldKeepRealtimeOrderWithinSameGroup() throws Exception {
+        nettyProperties.setGroupPushBatchSize(1);
+
+        EmbeddedChannel user2Channel = new EmbeddedChannel();
+        when(channelUserManager.getChannels(2L)).thenReturn(List.of(user2Channel));
+        when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
+        when(groupService.listActiveMemberUserIds(101L)).thenReturn(List.of(2L));
+
+        GroupMessageDO first = new GroupMessageDO();
+        first.setGroupId(101L);
+        first.setSeq(11L);
+        first.setServerMsgId("g-srv-11");
+        first.setFromUserId(1L);
+        first.setContent("m1");
+        first.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
+
+        GroupMessageDO second = new GroupMessageDO();
+        second.setGroupId(101L);
+        second.setSeq(12L);
+        second.setServerMsgId("g-srv-12");
+        second.setFromUserId(1L);
+        second.setContent("m2");
+        second.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:01Z")));
+
+        when(groupMessageService.persistTextMessage(101L, 1L, null, "m1"))
+                .thenReturn(new GroupMessageService.PersistResult(first));
+        when(groupMessageService.persistTextMessage(101L, 1L, null, "m2"))
+                .thenReturn(new GroupMessageService.PersistResult(second));
+
+        List<Runnable> submittedTasks = new ArrayList<>();
+        GroupPushCoordinator coordinator = new GroupPushCoordinator();
+        EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(
+                channelUserManager,
+                messageService,
+                contactService,
+                groupService,
+                groupMessageService,
+                nettyProperties,
+                deliveryMapper,
+                metricsService,
+                submittedTasks::add,
+                coordinator
+        ));
+        senderChannel.attr(NettyAttr.USER_ID).set(1L);
+
+        senderChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_CHAT\",\"groupId\":101,\"content\":\"m1\"}"));
+        senderChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_CHAT\",\"groupId\":101,\"content\":\"m2\"}"));
+
+        assertEquals(1, submittedTasks.size());
+        submittedTasks.remove(0).run();
+        assertEquals(1, submittedTasks.size());
+        submittedTasks.remove(0).run();
+
+        List<JsonNode> pushed = readOutboundJson(user2Channel);
+        assertEquals(2, pushed.size());
+        assertEquals(11L, pushed.get(0).get("seq").asLong());
+        assertEquals(12L, pushed.get(1).get("seq").asLong());
+    }
+
+    @Test
+    void groupChatShouldCountFailedPushes() throws Exception {
+        Channel failedChannel = mock(Channel.class);
+        ChannelId failedChannelId = mock(ChannelId.class);
+        when(failedChannelId.asShortText()).thenReturn("failed-channel");
+        when(failedChannelId.asLongText()).thenReturn("failed-channel");
+        when(failedChannel.id()).thenReturn(failedChannelId);
+        when(failedChannel.writeAndFlush(any())).thenThrow(new RuntimeException("push failed"));
+
+        when(channelUserManager.getChannels(2L)).thenReturn(List.of(failedChannel));
+        when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
+        when(groupService.listActiveMemberUserIds(101L)).thenReturn(List.of(2L));
+
+        GroupMessageDO saved = new GroupMessageDO();
+        saved.setGroupId(101L);
+        saved.setSeq(8L);
+        saved.setServerMsgId("g-srv-8");
+        saved.setFromUserId(1L);
+        saved.setContent("boom");
+        saved.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
+        when(groupMessageService.persistTextMessage(101L, 1L, null, "boom"))
+                .thenReturn(new GroupMessageService.PersistResult(saved));
+
+        EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService, Runnable::run));
+        senderChannel.attr(NettyAttr.USER_ID).set(1L);
+
+        senderChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_CHAT\",\"groupId\":101,\"content\":\"boom\"}"));
+
+        verify(metricsService).incrementGroupPushAttempt(1L);
+        verify(metricsService).incrementGroupPushFail();
+    }
+
+    @Test
+    void groupChatShouldSkipRealtimeFanoutWhenExecutorRejects() throws Exception {
+        nettyProperties.setGroupPushBatchSize(2);
+
+        EmbeddedChannel user2Channel = new EmbeddedChannel();
+        EmbeddedChannel user3Channel = new EmbeddedChannel();
+        EmbeddedChannel user4Channel = new EmbeddedChannel();
+        when(channelUserManager.getChannels(2L)).thenReturn(List.of(user2Channel));
+        when(channelUserManager.getChannels(3L)).thenReturn(List.of(user3Channel));
+        when(channelUserManager.getChannels(4L)).thenReturn(List.of(user4Channel));
+        when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
+        when(groupService.listActiveMemberUserIds(101L)).thenReturn(List.of(2L, 3L, 4L));
+
+        GroupMessageDO saved = new GroupMessageDO();
+        saved.setGroupId(101L);
+        saved.setSeq(9L);
+        saved.setServerMsgId("g-srv-9");
+        saved.setFromUserId(1L);
+        saved.setContent("degrade");
+        saved.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
+        when(groupMessageService.persistTextMessage(101L, 1L, null, "degrade"))
+                .thenReturn(new GroupMessageService.PersistResult(saved));
+
+        List<Runnable> acceptedTasks = new ArrayList<>();
+        AtomicInteger executeCount = new AtomicInteger(0);
+
+        EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(
+                channelUserManager,
+                messageService,
+                contactService,
+                groupService,
+                groupMessageService,
+                nettyProperties,
+                deliveryMapper,
+                metricsService,
+                command -> {
+                    if (executeCount.getAndIncrement() == 0) {
+                        acceptedTasks.add(command);
+                        return;
+                    }
+                    throw new RejectedExecutionException("queue full");
+                }
+        ));
+        senderChannel.attr(NettyAttr.USER_ID).set(1L);
+
+        senderChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_CHAT\",\"groupId\":101,\"content\":\"degrade\"}"));
+        acceptedTasks.forEach(Runnable::run);
+
+        verify(metricsService).incrementGroupPushAttempt(3L);
+        verify(metricsService).incrementGroupPushReject();
+        assertEquals(1, readOutboundJson(user2Channel).size());
+        assertEquals(1, readOutboundJson(user3Channel).size());
+        assertTrue(readOutboundJson(user4Channel).isEmpty());
     }
 
     @Test
     void groupChatShouldRejectNonMember() throws Exception {
         when(groupService.isActiveMember(101L, 1L)).thenReturn(false);
-        EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
         senderChannel.attr(NettyAttr.USER_ID).set(1L);
 
         senderChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_CHAT\",\"groupId\":101,\"content\":\"hello\"}"));
@@ -338,7 +747,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupService.quitGroup(101L, 1L)).thenReturn(new GroupService.QuitGroupResult(true, false));
         when(groupService.isActiveMember(101L, 1L)).thenReturn(false);
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_QUIT\",\"groupId\":101}"));
@@ -372,7 +781,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupMessageService.pullOffline(101L, 1L, null, 2))
                 .thenReturn(new GroupMessageService.PullResult(List.of(m1, m2), false, 12L));
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_PULL_OFFLINE\",\"groupId\":101,\"limit\":2}"));
@@ -404,7 +813,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupMessageService.pullOffline(101L, 1L, 20L, 2))
                 .thenReturn(new GroupMessageService.PullResult(List.of(m1, m2), true, 22L));
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_PULL_OFFLINE\",\"groupId\":101,\"limit\":2,\"cursorSeq\":20}"));
@@ -444,6 +853,16 @@ class WebSocketFrameHandlerIntegrationTest {
             cursorId = last.getId();
         }
         return new MessageService.CursorPageResult(new ArrayList<>(messages), hasMore, cursorCreatedAt, cursorId);
+    }
+
+    private ContactDO contact(Long ownerUserId, Long peerUserId, Integer relationStatus, String updatedAt) {
+        ContactDO contact = new ContactDO();
+        contact.setOwnerUserId(ownerUserId);
+        contact.setPeerUserId(peerUserId);
+        contact.setRelationStatus(relationStatus);
+        contact.setCreatedAt(Date.from(Instant.parse(updatedAt)));
+        contact.setUpdatedAt(Date.from(Instant.parse(updatedAt)));
+        return contact;
     }
     /**
      * 方法说明。
