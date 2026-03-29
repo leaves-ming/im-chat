@@ -15,8 +15,10 @@ import org.springframework.stereotype.Component;
 public class SensitiveWordProperties {
     /** 是否启用敏感词过滤，默认关闭以保持兼容。 */
     private boolean enabled = false;
-    /** 过滤模式，MVP 仅支持 REJECT。 */
+    /** 过滤模式，支持 REJECT / REPLACE。 */
     private String mode = "REJECT";
     /** 词库来源，默认 classpath 文件。 */
     private String wordSource = "classpath:sensitive_words.txt";
+    /** 词库加载失败时是否放行，默认 true 以保持兼容。 */
+    private boolean failOpen = true;
 }

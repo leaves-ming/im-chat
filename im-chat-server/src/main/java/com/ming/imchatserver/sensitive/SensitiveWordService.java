@@ -1,9 +1,11 @@
 package com.ming.imchatserver.sensitive;
 
 import com.ming.imchatserver.config.SensitiveWordProperties;
+import com.ming.imchatserver.metrics.MetricsService;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
 import org.springframework.stereotype.Service;
@@ -24,11 +26,21 @@ public class SensitiveWordService {
 
     private final SensitiveWordProperties properties;
     private final ResourceLoader resourceLoader;
+    private final MetricsService metricsService;
     private volatile SensitiveWordEngine engine = new SensitiveWordEngine(List.of());
+    private volatile RuntimeException loadFailure;
 
-    public SensitiveWordService(SensitiveWordProperties properties, ResourceLoader resourceLoader) {
+    @Autowired
+    public SensitiveWordService(SensitiveWordProperties properties,
+                                ResourceLoader resourceLoader,
+                                MetricsService metricsService) {
         this.properties = properties;
         this.resourceLoader = resourceLoader;
+        this.metricsService = metricsService;
+    }
+
+    public SensitiveWordService(SensitiveWordProperties properties, ResourceLoader resourceLoader) {
+        this(properties, resourceLoader, null);
     }
 
     @PostConstruct
@@ -37,36 +49,79 @@ public class SensitiveWordService {
     }
 
     public boolean contains(String text) {
-        if (!properties.isEnabled()) {
-            return false;
-        }
-        return engine.contains(text);
+        return filter(text).isHit();
     }
 
     public String replace(String text) {
-        if (!properties.isEnabled()) {
-            return text;
-        }
-        return engine.replace(text);
+        return filter(text).getOutputText();
     }
 
     public boolean isRejectMode() {
-        return "REJECT".equalsIgnoreCase(properties.getMode());
+        return resolveMode() == SensitiveWordMode.REJECT;
+    }
+
+    public SensitiveWordFilterResult check(String text) {
+        return filter(text);
+    }
+
+    public SensitiveWordFilterResult filter(String text) {
+        SensitiveWordMode mode = resolveMode();
+        if (mode == SensitiveWordMode.OFF) {
+            return SensitiveWordFilterResult.passThrough(SensitiveWordMode.OFF, text);
+        }
+        incrementCheckMetric();
+        ensureAvailable();
+
+        SensitiveWordEngine.EngineResult engineResult = engine.filter(text);
+        String outputText = mode == SensitiveWordMode.REPLACE ? engineResult.getOutputText() : text;
+        SensitiveWordFilterResult result = new SensitiveWordFilterResult(
+                engineResult.isHit(),
+                mode,
+                engineResult.getMatchedWord(),
+                outputText
+        );
+        if (result.isHit()) {
+            incrementHitMetric();
+            if (mode == SensitiveWordMode.REPLACE) {
+                incrementReplaceMetric();
+            }
+            logger.warn("sensitive word hit mode={} matchedWord={} textLength={} failOpen={}",
+                    mode,
+                    result.getMatchedWord(),
+                    text == null ? 0 : text.length(),
+                    properties.isFailOpen());
+        }
+        return result;
     }
 
     public void validateTextOrThrow(String text) {
-        if (!properties.isEnabled() || !isRejectMode()) {
-            return;
-        }
-        if (engine.contains(text)) {
-            throw new SensitiveWordHitException();
+        SensitiveWordFilterResult result = filter(text);
+        if (result.shouldReject()) {
+            throw new SensitiveWordHitException(result.getMatchedWord());
         }
     }
 
     void reload() {
-        List<String> words = loadWords();
-        this.engine = new SensitiveWordEngine(words);
-        logger.info("sensitive words loaded count={} source={}", words.size(), properties.getWordSource());
+        try {
+            List<String> words = loadWords();
+            this.engine = new SensitiveWordEngine(words);
+            this.loadFailure = null;
+            logger.info("sensitive words loaded count={} source={} mode={} failOpen={}",
+                    words.size(),
+                    properties.getWordSource(),
+                    resolveMode(),
+                    properties.isFailOpen());
+        } catch (Exception ex) {
+            this.engine = new SensitiveWordEngine(List.of());
+            this.loadFailure = ex instanceof RuntimeException runtimeException
+                    ? runtimeException
+                    : new IllegalStateException(ex.getMessage(), ex);
+            if (properties.isFailOpen()) {
+                logger.warn("load sensitive word source failed, fail-open enabled source={}", properties.getWordSource(), ex);
+            } else {
+                logger.error("load sensitive word source failed, fail-close enabled source={}", properties.getWordSource(), ex);
+            }
+        }
     }
 
     private List<String> loadWords() {
@@ -74,27 +129,53 @@ public class SensitiveWordService {
         if (source == null || source.isBlank()) {
             return List.of();
         }
-        try {
-            Resource resource = resourceLoader.getResource(source);
-            if (!resource.exists()) {
-                logger.warn("sensitive word source not found: {}", source);
-                return List.of();
-            }
-            List<String> words = new ArrayList<>();
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(resource.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    String trimmed = line.trim();
-                    if (trimmed.isEmpty() || trimmed.startsWith("#")) {
-                        continue;
-                    }
-                    words.add(trimmed);
+        Resource resource = resourceLoader.getResource(source);
+        if (!resource.exists()) {
+            throw new IllegalStateException("sensitive word source not found: " + source);
+        }
+        List<String> words = new ArrayList<>();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(resource.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                    continue;
                 }
+                words.add(trimmed);
             }
-            return words;
         } catch (Exception ex) {
-            logger.warn("load sensitive word source failed: {}", source, ex);
-            return List.of();
+            throw new IllegalStateException("load sensitive word source failed: " + source, ex);
+        }
+        return words;
+    }
+
+    private SensitiveWordMode resolveMode() {
+        return SensitiveWordMode.from(properties.isEnabled(), properties.getMode());
+    }
+
+    private void ensureAvailable() {
+        RuntimeException failure = loadFailure;
+        if (failure == null || properties.isFailOpen()) {
+            return;
+        }
+        throw new SensitiveWordUnavailableException(properties.getWordSource(), failure);
+    }
+
+    private void incrementCheckMetric() {
+        if (metricsService != null) {
+            metricsService.incrementSensitiveCheck();
+        }
+    }
+
+    private void incrementHitMetric() {
+        if (metricsService != null) {
+            metricsService.incrementSensitiveHit();
+        }
+    }
+
+    private void incrementReplaceMetric() {
+        if (metricsService != null) {
+            metricsService.incrementSensitiveReplace();
         }
     }
 }

@@ -23,31 +23,21 @@ public class SensitiveWordEngine {
     }
 
     public boolean contains(String text) {
-        if (text == null || text.isBlank()) {
-            return false;
-        }
-        String normalized = normalize(text);
-        for (int i = 0; i < normalized.length(); i++) {
-            TrieNode current = root;
-            for (int j = i; j < normalized.length(); j++) {
-                current = current.children.get(normalized.charAt(j));
-                if (current == null) {
-                    break;
-                }
-                if (current.wordEnd) {
-                    return true;
-                }
-            }
-        }
-        return false;
+        return filter(text).isHit();
     }
 
     public String replace(String text) {
+        return filter(text).getOutputText();
+    }
+
+    public EngineResult filter(String text) {
         if (text == null || text.isEmpty()) {
-            return text;
+            return new EngineResult(false, null, text);
         }
         char[] replaced = text.toCharArray();
-        String normalized = normalize(text);
+        String normalized = normalizeText(text);
+        String matchedWord = null;
+        boolean hit = false;
         for (int i = 0; i < normalized.length(); i++) {
             TrieNode current = root;
             int lastMatchEnd = -1;
@@ -61,17 +51,21 @@ public class SensitiveWordEngine {
                 }
             }
             if (lastMatchEnd >= i) {
+                if (matchedWord == null) {
+                    matchedWord = text.substring(i, lastMatchEnd + 1);
+                }
+                hit = true;
                 for (int k = i; k <= lastMatchEnd; k++) {
                     replaced[k] = '*';
                 }
                 i = lastMatchEnd;
             }
         }
-        return new String(replaced);
+        return new EngineResult(hit, matchedWord, hit ? new String(replaced) : text);
     }
 
     private void insert(String word) {
-        String normalized = normalize(word);
+        String normalized = normalizeWord(word);
         if (normalized.isEmpty()) {
             return;
         }
@@ -83,12 +77,40 @@ public class SensitiveWordEngine {
         current.wordEnd = true;
     }
 
-    private String normalize(String text) {
+    private String normalizeText(String text) {
+        return text == null ? "" : text.toLowerCase(Locale.ROOT);
+    }
+
+    private String normalizeWord(String text) {
         return text == null ? "" : text.trim().toLowerCase(Locale.ROOT);
     }
 
     private static class TrieNode {
         private final Map<Character, TrieNode> children = new HashMap<>();
         private boolean wordEnd;
+    }
+
+    public static class EngineResult {
+        private final boolean hit;
+        private final String matchedWord;
+        private final String outputText;
+
+        public EngineResult(boolean hit, String matchedWord, String outputText) {
+            this.hit = hit;
+            this.matchedWord = matchedWord;
+            this.outputText = outputText;
+        }
+
+        public boolean isHit() {
+            return hit;
+        }
+
+        public String getMatchedWord() {
+            return matchedWord;
+        }
+
+        public String getOutputText() {
+            return outputText;
+        }
     }
 }

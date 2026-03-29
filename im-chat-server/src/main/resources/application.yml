@@ -90,6 +90,7 @@ im:
     enabled: false
     mode: REJECT
     word-source: classpath:sensitive_words.txt
+    fail-open: true
   metrics:
     sample-fixed-delay-ms: 10000
     log-fixed-delay-ms: 60000

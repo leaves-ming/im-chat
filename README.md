@@ -45,8 +45,9 @@ im/
 - 支持 `PULL_OFFLINE` 按游标增量拉取历史消息。
 - 心跳与连接清理
 - 支持 Ping/Pong 与空闲检测，断连时清理映射。
-- 敏感词过滤（MVP）
-- 支持本地词库 + 内存 Trie 匹配，当前仅接入文本消息 `REJECT` 模式。
+- 敏感词过滤
+- 支持本地词库 + 内存 Trie/DFA，文本消息统一经 service 层前置过滤。
+- 支持 `REJECT` / `REPLACE` 两种模式、命中指标、脱敏日志和词库加载失败策略。
 - 群推送优化
 - `GROUP_CHAT` 采用预聚合在线 channel、分批异步推送与失败统计，降低大群推送对 I/O 线程的冲击。
 - Outbox 稳定性
@@ -138,6 +139,15 @@ im/
   "type": "ERROR",
   "code": "SENSITIVE_WORD_HIT",
   "msg": "message contains sensitive words"
+}
+```
+
+词库不可用且 `im.sensitive.fail-open=false` 时的错误响应：
+```json
+{
+  "type": "ERROR",
+  "code": "SENSITIVE_WORD_UNAVAILABLE",
+  "msg": "sensitive word dictionary unavailable: classpath:sensitive_words.txt"
 }
 ```
 
@@ -266,16 +276,23 @@ im/
 
 - 接入范围：`CHAT` 与 `GROUP_CHAT` 的文本消息。
 - 过滤时机：消息入库前。
-- 当前模式：`REJECT`。
-- 命中后行为：
-  - 返回 `ERROR(code=SENSITIVE_WORD_HIT, msg=\"message contains sensitive words\")`
-  - 不落库
-  - 不推送
-  - 不进入离线补拉
+- service 层统一入口：`SensitiveWordService.filter(text)` / `check(text)`。
+- 统一结果：`hit`、`mode`、`matchedWord`、`outputText`。
+- 模式说明：
+  - `REJECT`：命中后返回 `ERROR(code=SENSITIVE_WORD_HIT, msg=\"message contains sensitive words\")`，不落库、不推送、不进入离线补拉。
+  - `REPLACE`：命中后不报错，使用替换后的 `outputText` 继续落库、推送、离线补拉。
+  - `OFF`：开关关闭时直接放行，`outputText` 为原文。
+- 词库加载失败策略：
+  - `im.sensitive.fail-open=true`：词库加载失败时放行。
+  - `im.sensitive.fail-open=false`：词库加载失败时拒绝消息，返回 `ERROR(code=SENSITIVE_WORD_UNAVAILABLE, ...)`。
 - 实现方式：
   - 词库来源：本地文件
   - 默认位置：`im-chat-server/src/main/resources/sensitive_words.txt`
   - 匹配方式：内存 Trie / DFA 前缀树
+- 可观测性：
+  - 指标：`im_sensitive_check_total`、`im_sensitive_hit_total`、`im_sensitive_replace_total`
+  - 查询：`GET /internal/metrics`
+  - 日志：命中时打印 `mode`、`matchedWord`、`textLength`，不打印完整原始文本
 
 ## 5. 快速启动
 
@@ -314,8 +331,9 @@ CREATE DATABASE IF NOT EXISTS im_chat DEFAULT CHARACTER SET utf8mb4;
 - `im.netty.group-push-queue-capacity`（默认 `1000`，群推送调度队列容量）
 - `im.reliability.processing-timeout-ms`（默认 `30000`，PROCESSING 超时回收阈值）
 - `im.sensitive.enabled`（默认 `false`，是否启用敏感词过滤）
-- `im.sensitive.mode`（默认 `REJECT`，MVP 仅支持 `REJECT`）
+- `im.sensitive.mode`（默认 `REJECT`，支持 `REJECT` / `REPLACE`）
 - `im.sensitive.word-source`（默认 `classpath:sensitive_words.txt`）
+- `im.sensitive.fail-open`（默认 `true`，词库加载失败时是否放行）
 
 ## 5.4 启动服务
 
@@ -375,14 +393,24 @@ mvn -pl im-chat-server test
 
 ## 8. 敏感词示例
 
-请求：
+`REJECT` 模式请求：
 ```json
 {"type":"CHAT","targetUserId":2,"content":"this contains badword","clientMsgId":"c-20001"}
 ```
 
-响应：
+`REJECT` 模式响应：
 ```json
 {"type":"ERROR","code":"SENSITIVE_WORD_HIT","msg":"message contains sensitive words"}
+```
+
+`REPLACE` 模式下，同一请求会被替换后继续处理：
+```json
+{"type":"CHAT","targetUserId":2,"content":"this contains *******","clientMsgId":"c-20001"}
+```
+
+群聊 `REPLACE` 示例：
+```json
+{"type":"GROUP_CHAT","groupId":101,"content":"hello *******","clientMsgId":"g-30001"}
 ```
 
 ## 9. 演进路线

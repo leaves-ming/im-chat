@@ -9,6 +9,8 @@ import com.ming.imchatserver.dao.OutboxMessageDO;
 import com.ming.imchatserver.mapper.MessageMapper;
 import com.ming.imchatserver.mapper.OutboxMapper;
 import com.ming.imchatserver.mq.DispatchMessagePayload;
+import com.ming.imchatserver.sensitive.SensitiveWordFilterResult;
+import com.ming.imchatserver.sensitive.SensitiveWordHitException;
 import com.ming.imchatserver.sensitive.SensitiveWordService;
 import com.ming.imchatserver.service.MessageService;
 import org.slf4j.Logger;
@@ -79,7 +81,13 @@ public class MessageServiceImpl implements MessageService {
     @Transactional(rollbackFor = Exception.class)
     public PersistResult persistMessage(MessageDO msg) {
         if (sensitiveWordService != null) {
-            sensitiveWordService.validateTextOrThrow(msg == null ? null : msg.getContent());
+            SensitiveWordFilterResult filterResult = sensitiveWordService.filter(msg == null ? null : msg.getContent());
+            if (filterResult.shouldReject()) {
+                throw new SensitiveWordHitException(filterResult.getMatchedWord());
+            }
+            if (msg != null) {
+                msg.setContent(filterResult.getOutputText());
+            }
         }
         msg.setClientMsgId(normalizeClientMsgId(msg.getClientMsgId()));
 

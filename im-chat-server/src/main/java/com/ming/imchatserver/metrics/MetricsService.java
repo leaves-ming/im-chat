@@ -30,6 +30,9 @@ public class MetricsService {
     private final AtomicLong groupPushAttemptTotal = new AtomicLong(0L);
     private final AtomicLong groupPushFailTotal = new AtomicLong(0L);
     private final AtomicLong groupPushRejectTotal = new AtomicLong(0L);
+    private final AtomicLong sensitiveCheckTotal = new AtomicLong(0L);
+    private final AtomicLong sensitiveHitTotal = new AtomicLong(0L);
+    private final AtomicLong sensitiveReplaceTotal = new AtomicLong(0L);
     private final SlidingWindowLatency deliveredLatencyWindow = new SlidingWindowLatency(4096);
     private final SlidingWindowLatency ackedLatencyWindow = new SlidingWindowLatency(4096);
 
@@ -63,6 +66,18 @@ public class MetricsService {
         groupPushRejectTotal.incrementAndGet();
     }
 
+    public void incrementSensitiveCheck() {
+        sensitiveCheckTotal.incrementAndGet();
+    }
+
+    public void incrementSensitiveHit() {
+        sensitiveHitTotal.incrementAndGet();
+    }
+
+    public void incrementSensitiveReplace() {
+        sensitiveReplaceTotal.incrementAndGet();
+    }
+
     /**
      * 记录状态推进延迟，延迟值单位毫秒。
      * delivered latency = delivered_at - created_at
@@ -89,6 +104,9 @@ public class MetricsService {
         long groupAttemptTotal = groupPushAttemptTotal.get();
         long groupFailTotal = groupPushFailTotal.get();
         long groupRejectTotal = groupPushRejectTotal.get();
+        long checkTotal = sensitiveCheckTotal.get();
+        long hitTotal = sensitiveHitTotal.get();
+        long replaceTotal = sensitiveReplaceTotal.get();
         long deliveredP95 = deliveredLatencyWindow.p95();
         long ackedP95 = ackedLatencyWindow.p95();
         return new MetricsSnapshot(
@@ -100,6 +118,9 @@ public class MetricsService {
                 groupAttemptTotal,
                 groupFailTotal,
                 groupRejectTotal,
+                checkTotal,
+                hitTotal,
+                replaceTotal,
                 deliveredP95,
                 ackedP95
         );
@@ -124,7 +145,7 @@ public class MetricsService {
     @Scheduled(fixedDelayString = "${im.metrics.log-fixed-delay-ms:60000}")
     public void logMetrics() {
         MetricsSnapshot snapshot = snapshot();
-        logger.info("metrics im_outbox_backlog={} im_outbox_processing_backlog={} im_relay_send_total={} im_relay_fail_total={} im_relay_fail_rate={} im_group_push_attempt_total={} im_group_push_fail_total={} im_group_push_reject_total={} im_ack_latency_ms{{type=DELIVERED,p95={}}} im_ack_latency_ms{{type=ACKED,p95={}}}",
+        logger.info("metrics im_outbox_backlog={} im_outbox_processing_backlog={} im_relay_send_total={} im_relay_fail_total={} im_relay_fail_rate={} im_group_push_attempt_total={} im_group_push_fail_total={} im_group_push_reject_total={} im_sensitive_check_total={} im_sensitive_hit_total={} im_sensitive_replace_total={} im_ack_latency_ms{{type=DELIVERED,p95={}}} im_ack_latency_ms{{type=ACKED,p95={}}}",
                 snapshot.getImOutboxBacklog(),
                 snapshot.getImOutboxProcessingBacklog(),
                 snapshot.getImRelaySendTotal(),
@@ -133,6 +154,9 @@ public class MetricsService {
                 snapshot.getImGroupPushAttemptTotal(),
                 snapshot.getImGroupPushFailTotal(),
                 snapshot.getImGroupPushRejectTotal(),
+                snapshot.getImSensitiveCheckTotal(),
+                snapshot.getImSensitiveHitTotal(),
+                snapshot.getImSensitiveReplaceTotal(),
                 snapshot.getImAckLatencyDeliveredP95Ms(),
                 snapshot.getImAckLatencyAckedP95Ms());
     }
@@ -149,6 +173,9 @@ public class MetricsService {
         private final long imGroupPushAttemptTotal;
         private final long imGroupPushFailTotal;
         private final long imGroupPushRejectTotal;
+        private final long imSensitiveCheckTotal;
+        private final long imSensitiveHitTotal;
+        private final long imSensitiveReplaceTotal;
         private final long imAckLatencyDeliveredP95Ms;
         private final long imAckLatencyAckedP95Ms;
 
@@ -160,6 +187,9 @@ public class MetricsService {
                                long imGroupPushAttemptTotal,
                                long imGroupPushFailTotal,
                                long imGroupPushRejectTotal,
+                               long imSensitiveCheckTotal,
+                               long imSensitiveHitTotal,
+                               long imSensitiveReplaceTotal,
                                long imAckLatencyDeliveredP95Ms,
                                long imAckLatencyAckedP95Ms) {
             this.imOutboxBacklog = imOutboxBacklog;
@@ -170,6 +200,9 @@ public class MetricsService {
             this.imGroupPushAttemptTotal = imGroupPushAttemptTotal;
             this.imGroupPushFailTotal = imGroupPushFailTotal;
             this.imGroupPushRejectTotal = imGroupPushRejectTotal;
+            this.imSensitiveCheckTotal = imSensitiveCheckTotal;
+            this.imSensitiveHitTotal = imSensitiveHitTotal;
+            this.imSensitiveReplaceTotal = imSensitiveReplaceTotal;
             this.imAckLatencyDeliveredP95Ms = imAckLatencyDeliveredP95Ms;
             this.imAckLatencyAckedP95Ms = imAckLatencyAckedP95Ms;
         }
@@ -206,6 +239,18 @@ public class MetricsService {
             return imGroupPushRejectTotal;
         }
 
+        public long getImSensitiveCheckTotal() {
+            return imSensitiveCheckTotal;
+        }
+
+        public long getImSensitiveHitTotal() {
+            return imSensitiveHitTotal;
+        }
+
+        public long getImSensitiveReplaceTotal() {
+            return imSensitiveReplaceTotal;
+        }
+
         public long getImAckLatencyDeliveredP95Ms() {
             return imAckLatencyDeliveredP95Ms;
         }
@@ -224,6 +269,9 @@ public class MetricsService {
             m.put("im_group_push_attempt_total", imGroupPushAttemptTotal);
             m.put("im_group_push_fail_total", imGroupPushFailTotal);
             m.put("im_group_push_reject_total", imGroupPushRejectTotal);
+            m.put("im_sensitive_check_total", imSensitiveCheckTotal);
+            m.put("im_sensitive_hit_total", imSensitiveHitTotal);
+            m.put("im_sensitive_replace_total", imSensitiveReplaceTotal);
             m.put("im_ack_latency_ms", Map.of(
                     "delivered_p95", imAckLatencyDeliveredP95Ms,
                     "acked_p95", imAckLatencyAckedP95Ms

@@ -12,6 +12,7 @@ import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
+import com.ming.imchatserver.sensitive.SensitiveWordUnavailableException;
 import com.ming.imchatserver.service.ContactService;
 import com.ming.imchatserver.service.GroupBizException;
 import com.ming.imchatserver.service.GroupMessageService;
@@ -246,6 +247,8 @@ import java.util.concurrent.RejectedExecutionException;
         } catch (GroupBizException ex) {
             sendError(ch, ex.getCode().name(), ex.getMessage());
         } catch (SensitiveWordHitException ex) {
+            sendError(ch, ex.getCode(), ex.getMessage());
+        } catch (SensitiveWordUnavailableException ex) {
             sendError(ch, ex.getCode(), ex.getMessage());
         } catch (Exception ex) {
             logger.error("process text frame error", ex);

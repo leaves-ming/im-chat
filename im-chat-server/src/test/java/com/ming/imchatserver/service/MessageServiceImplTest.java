@@ -2,11 +2,14 @@ package com.ming.imchatserver.service;
 
 import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.mapper.MessageMapper;
+import com.ming.imchatserver.sensitive.SensitiveWordFilterResult;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
+import com.ming.imchatserver.sensitive.SensitiveWordMode;
 import com.ming.imchatserver.sensitive.SensitiveWordService;
 import com.ming.imchatserver.service.impl.MessageServiceImpl;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DuplicateKeyException;
+import org.mockito.ArgumentCaptor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -160,9 +163,32 @@ class MessageServiceImplTest {
         msg.setToUserId(2L);
         msg.setContent("badword");
 
-        org.mockito.Mockito.doThrow(new SensitiveWordHitException()).when(sensitiveWordService).validateTextOrThrow("badword");
+        when(sensitiveWordService.filter("badword"))
+                .thenReturn(new SensitiveWordFilterResult(true, SensitiveWordMode.REJECT, "badword", "badword"));
 
         org.junit.jupiter.api.Assertions.assertThrows(SensitiveWordHitException.class, () -> service.persistMessage(msg));
         verify(mapper, never()).insert(any(MessageDO.class));
+    }
+
+    @Test
+    void persistMessageShouldReplaceSensitiveWordsBeforeInsert() {
+        MessageMapper mapper = mock(MessageMapper.class);
+        SensitiveWordService sensitiveWordService = mock(SensitiveWordService.class);
+        MessageServiceImpl service = new MessageServiceImpl(mapper, null, null, sensitiveWordService);
+
+        MessageDO msg = new MessageDO();
+        msg.setFromUserId(1L);
+        msg.setToUserId(2L);
+        msg.setContent("badword");
+
+        when(sensitiveWordService.filter("badword"))
+                .thenReturn(new SensitiveWordFilterResult(true, SensitiveWordMode.REPLACE, "badword", "*******"));
+
+        service.persistMessage(msg);
+
+        ArgumentCaptor<MessageDO> captor = ArgumentCaptor.forClass(MessageDO.class);
+        verify(mapper).insert(captor.capture());
+        assertEquals("*******", captor.getValue().getContent());
+        assertEquals("*******", msg.getContent());
     }
 }

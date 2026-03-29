@@ -3,20 +3,26 @@ package com.ming.imchatserver.service;
 import com.ming.imchatserver.dao.GroupMessageDO;
 import com.ming.imchatserver.mapper.GroupCursorMapper;
 import com.ming.imchatserver.mapper.GroupMessageMapper;
+import com.ming.imchatserver.sensitive.SensitiveWordFilterResult;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
+import com.ming.imchatserver.sensitive.SensitiveWordMode;
 import com.ming.imchatserver.sensitive.SensitiveWordService;
 import com.ming.imchatserver.service.impl.GroupMessageServiceImpl;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.stubbing.Answer;
 import org.springframework.dao.DuplicateKeyException;
 
 import java.util.Date;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -98,11 +104,35 @@ class GroupMessageServiceImplTest {
         SensitiveWordService sensitiveWordService = mock(SensitiveWordService.class);
         GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, sensitiveWordService);
 
-        org.mockito.Mockito.doThrow(new SensitiveWordHitException()).when(sensitiveWordService).validateTextOrThrow("badword");
+        when(sensitiveWordService.filter("badword"))
+                .thenReturn(new SensitiveWordFilterResult(true, SensitiveWordMode.REJECT, "badword", "badword"));
 
         org.junit.jupiter.api.Assertions.assertThrows(SensitiveWordHitException.class,
                 () -> service.persistTextMessage(101L, 1L, null, "badword"));
-        verify(groupMessageMapper, org.mockito.Mockito.never()).insert(any(GroupMessageDO.class));
+        verify(groupMessageMapper, never()).insert(any(GroupMessageDO.class));
+    }
+
+    @Test
+    void persistTextMessageShouldReplaceSensitiveWordsBeforeInsert() {
+        GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
+        GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
+        SensitiveWordService sensitiveWordService = mock(SensitiveWordService.class);
+        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, sensitiveWordService);
+        AtomicReference<String> insertedContent = new AtomicReference<>();
+
+        when(groupMessageMapper.findMaxSeq(101L)).thenReturn(3L);
+        when(sensitiveWordService.filter("hello badword"))
+                .thenReturn(new SensitiveWordFilterResult(true, SensitiveWordMode.REPLACE, "badword", "hello *******"));
+        doAnswer((Answer<Integer>) invocation -> {
+            GroupMessageDO message = invocation.getArgument(0);
+            insertedContent.set(message.getContent());
+            return 1;
+        }).when(groupMessageMapper).insert(any(GroupMessageDO.class));
+
+        GroupMessageService.PersistResult result = service.persistTextMessage(101L, 1L, null, "hello badword");
+
+        assertEquals("\"hello *******\"", insertedContent.get());
+        assertEquals("hello *******", result.getMessage().getContent());
     }
 
     private GroupMessageDO msg(Long seq, String rawContent) {

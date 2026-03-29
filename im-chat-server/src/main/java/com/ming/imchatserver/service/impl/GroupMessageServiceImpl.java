@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ming.imchatserver.dao.GroupMessageDO;
 import com.ming.imchatserver.mapper.GroupCursorMapper;
 import com.ming.imchatserver.mapper.GroupMessageMapper;
+import com.ming.imchatserver.sensitive.SensitiveWordFilterResult;
+import com.ming.imchatserver.sensitive.SensitiveWordHitException;
 import com.ming.imchatserver.sensitive.SensitiveWordService;
 import com.ming.imchatserver.service.GroupMessageService;
 import org.slf4j.Logger;
@@ -41,12 +43,17 @@ public class GroupMessageServiceImpl implements GroupMessageService {
 
     @Override
     public PersistResult persistTextMessage(Long groupId, Long fromUserId, String clientMsgId, String content) {
+        String filteredContent = content;
         if (sensitiveWordService != null) {
-            sensitiveWordService.validateTextOrThrow(content);
+            SensitiveWordFilterResult filterResult = sensitiveWordService.filter(content);
+            if (filterResult.shouldReject()) {
+                throw new SensitiveWordHitException(filterResult.getMatchedWord());
+            }
+            filteredContent = filterResult.getOutputText();
         }
         for (int attempt = 1; attempt <= MAX_SEQ_ALLOCATE_RETRY; attempt++) {
             try {
-                return tryPersistTextMessage(groupId, fromUserId, clientMsgId, content);
+                return tryPersistTextMessage(groupId, fromUserId, clientMsgId, filteredContent);
             } catch (DuplicateKeyException ex) {
                 // uk_group_seq 并发冲突时重试分配 seq。
                 logger.warn("persistTextMessage duplicate seq conflict, retry attempt={} groupId={}", attempt, groupId);
