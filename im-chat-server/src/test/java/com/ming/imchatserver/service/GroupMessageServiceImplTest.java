@@ -3,6 +3,7 @@ package com.ming.imchatserver.service;
 import com.ming.imchatserver.dao.GroupMessageDO;
 import com.ming.imchatserver.mapper.GroupCursorMapper;
 import com.ming.imchatserver.mapper.GroupMessageMapper;
+import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.sensitive.SensitiveWordFilterResult;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
 import com.ming.imchatserver.sensitive.SensitiveWordMode;
@@ -34,7 +35,7 @@ import static org.mockito.Mockito.when;
 class GroupMessageServiceImplTest {
 
     @Test
-    void persistTextMessageShouldRetryWhenSeqConflict() {
+    void persistMessageShouldRetryWhenSeqConflict() {
         GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
         GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
         GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, null);
@@ -44,7 +45,7 @@ class GroupMessageServiceImplTest {
                 .thenThrow(new DuplicateKeyException("dup"))
                 .thenReturn(1);
 
-        GroupMessageService.PersistResult result = service.persistTextMessage(101L, 1L, "cid-1", "hello");
+        GroupMessageService.PersistResult result = service.persistMessage(101L, 1L, "cid-1", "TEXT", "hello");
 
         ArgumentCaptor<GroupMessageDO> captor = ArgumentCaptor.forClass(GroupMessageDO.class);
         verify(groupMessageMapper, org.mockito.Mockito.times(2)).insert(captor.capture());
@@ -98,7 +99,7 @@ class GroupMessageServiceImplTest {
     }
 
     @Test
-    void persistTextMessageShouldRejectSensitiveWordsBeforeInsert() {
+    void persistMessageShouldRejectSensitiveWordsBeforeInsert() {
         GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
         GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
         SensitiveWordService sensitiveWordService = mock(SensitiveWordService.class);
@@ -108,12 +109,12 @@ class GroupMessageServiceImplTest {
                 .thenReturn(new SensitiveWordFilterResult(true, SensitiveWordMode.REJECT, "badword", "badword"));
 
         org.junit.jupiter.api.Assertions.assertThrows(SensitiveWordHitException.class,
-                () -> service.persistTextMessage(101L, 1L, null, "badword"));
+                () -> service.persistMessage(101L, 1L, null, "TEXT", "badword"));
         verify(groupMessageMapper, never()).insert(any(GroupMessageDO.class));
     }
 
     @Test
-    void persistTextMessageShouldReplaceSensitiveWordsBeforeInsert() {
+    void persistMessageShouldReplaceSensitiveWordsBeforeInsert() {
         GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
         GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
         SensitiveWordService sensitiveWordService = mock(SensitiveWordService.class);
@@ -129,10 +130,34 @@ class GroupMessageServiceImplTest {
             return 1;
         }).when(groupMessageMapper).insert(any(GroupMessageDO.class));
 
-        GroupMessageService.PersistResult result = service.persistTextMessage(101L, 1L, null, "hello badword");
+        GroupMessageService.PersistResult result = service.persistMessage(101L, 1L, null, "TEXT", "hello badword");
 
         assertEquals("\"hello *******\"", insertedContent.get());
         assertEquals("hello *******", result.getMessage().getContent());
+    }
+
+    @Test
+    void persistFileMessageShouldKeepStructuredJson() {
+        GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
+        GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
+        SensitiveWordService sensitiveWordService = mock(SensitiveWordService.class);
+        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, sensitiveWordService);
+        AtomicReference<String> insertedContent = new AtomicReference<>();
+
+        when(groupMessageMapper.findMaxSeq(101L)).thenReturn(7L);
+        doAnswer((Answer<Integer>) invocation -> {
+            GroupMessageDO message = invocation.getArgument(0);
+            insertedContent.set(message.getContent());
+            return 1;
+        }).when(groupMessageMapper).insert(any(GroupMessageDO.class));
+
+        String fileContent = "{\"fileId\":\"f1\",\"fileName\":\"a.txt\",\"size\":12,\"contentType\":\"text/plain\",\"url\":\"/files/f1/a.txt\"}";
+        GroupMessageService.PersistResult result = service.persistMessage(101L, 1L, null, "FILE", fileContent);
+
+        verify(sensitiveWordService, never()).filter(any());
+        assertEquals(fileContent, insertedContent.get());
+        assertEquals(MessageContentCodec.MSG_TYPE_FILE, result.getMessage().getMsgType());
+        assertEquals(fileContent, result.getMessage().getContent());
     }
 
     private GroupMessageDO msg(Long seq, String rawContent) {

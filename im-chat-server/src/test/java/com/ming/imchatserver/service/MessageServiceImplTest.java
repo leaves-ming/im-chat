@@ -2,6 +2,7 @@ package com.ming.imchatserver.service;
 
 import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.mapper.MessageMapper;
+import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.sensitive.SensitiveWordFilterResult;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
 import com.ming.imchatserver.sensitive.SensitiveWordMode;
@@ -10,6 +11,8 @@ import com.ming.imchatserver.service.impl.MessageServiceImpl;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DuplicateKeyException;
 import org.mockito.ArgumentCaptor;
+
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -175,6 +178,7 @@ class MessageServiceImplTest {
         MessageMapper mapper = mock(MessageMapper.class);
         SensitiveWordService sensitiveWordService = mock(SensitiveWordService.class);
         MessageServiceImpl service = new MessageServiceImpl(mapper, null, null, sensitiveWordService);
+        AtomicReference<String> insertedContent = new AtomicReference<>();
 
         MessageDO msg = new MessageDO();
         msg.setFromUserId(1L);
@@ -183,12 +187,37 @@ class MessageServiceImplTest {
 
         when(sensitiveWordService.filter("badword"))
                 .thenReturn(new SensitiveWordFilterResult(true, SensitiveWordMode.REPLACE, "badword", "*******"));
+        org.mockito.Mockito.doAnswer(invocation -> {
+            MessageDO saved = invocation.getArgument(0);
+            insertedContent.set(saved.getContent());
+            return 1;
+        }).when(mapper).insert(any(MessageDO.class));
+
+        service.persistMessage(msg);
+
+        verify(mapper).insert(any(MessageDO.class));
+        assertEquals("\"*******\"", insertedContent.get());
+        assertEquals("*******", msg.getContent());
+    }
+
+    @Test
+    void persistFileMessageShouldBypassSensitiveFilterAndStoreJsonObject() {
+        MessageMapper mapper = mock(MessageMapper.class);
+        SensitiveWordService sensitiveWordService = mock(SensitiveWordService.class);
+        MessageServiceImpl service = new MessageServiceImpl(mapper, null, null, sensitiveWordService);
+
+        MessageDO msg = new MessageDO();
+        msg.setFromUserId(1L);
+        msg.setToUserId(2L);
+        msg.setMsgType("FILE");
+        msg.setContent("{\"fileId\":\"f1\",\"fileName\":\"a.txt\",\"size\":12,\"contentType\":\"text/plain\",\"url\":\"/files/f1/a.txt\"}");
 
         service.persistMessage(msg);
 
         ArgumentCaptor<MessageDO> captor = ArgumentCaptor.forClass(MessageDO.class);
         verify(mapper).insert(captor.capture());
-        assertEquals("*******", captor.getValue().getContent());
-        assertEquals("*******", msg.getContent());
+        verify(sensitiveWordService, never()).filter(any());
+        assertEquals(MessageContentCodec.MSG_TYPE_FILE, captor.getValue().getMsgType());
+        assertEquals(msg.getContent(), captor.getValue().getContent());
     }
 }

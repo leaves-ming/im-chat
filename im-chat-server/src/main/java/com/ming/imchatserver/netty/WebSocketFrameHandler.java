@@ -10,6 +10,7 @@ import com.ming.imchatserver.dao.GroupMemberDO;
 import com.ming.imchatserver.dao.GroupMessageDO;
 import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.mapper.DeliveryMapper;
+import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
 import com.ming.imchatserver.sensitive.SensitiveWordUnavailableException;
@@ -463,9 +464,12 @@ import java.util.concurrent.RejectedExecutionException;
             sendError(ch, "INVALID_PARAM", "groupId must be greater than 0");
             return;
         }
-        String content = node.path("content").asText("");
-        if (content == null || content.trim().isEmpty()) {
-            sendError(ch, "INVALID_PARAM", "content must not be blank");
+        String msgType = MessageContentCodec.normalizeMsgType(node.path("msgType").asText(null));
+        String content;
+        try {
+            content = MessageContentCodec.validateAndSerializeIncomingContent(msgType, node.get("content"));
+        } catch (IllegalArgumentException ex) {
+            sendError(ch, "INVALID_PARAM", ex.getMessage());
             return;
         }
         if (groupService == null || groupMessageService == null) {
@@ -478,7 +482,7 @@ import java.util.concurrent.RejectedExecutionException;
         }
 
         String clientMsgId = normalizeClientMsgId(node.path("clientMsgId").asText(null));
-        GroupMessageService.PersistResult persistResult = groupMessageService.persistTextMessage(groupId, fromUserId, clientMsgId, content);
+        GroupMessageService.PersistResult persistResult = groupMessageService.persistMessage(groupId, fromUserId, clientMsgId, msgType, content);
         GroupMessageDO message = persistResult.getMessage();
 
         dispatchGroupPush(groupId, message);
@@ -526,12 +530,12 @@ import java.util.concurrent.RejectedExecutionException;
         ArrayNode messages = mapper.createArrayNode();
         for (GroupMessageDO message : pullResult.getMessages()) {
             ObjectNode item = mapper.createObjectNode();
-            item.put("type", "TEXT");
+            item.put("msgType", MessageContentCodec.normalizeMsgType(message.getMsgType()));
             item.put("groupId", message.getGroupId());
             item.put("seq", message.getSeq());
             item.put("serverMsgId", message.getServerMsgId());
             item.put("fromUserId", message.getFromUserId());
-            item.put("content", message.getContent());
+            MessageContentCodec.writeProtocolContent(item, "content", message.getMsgType(), message.getContent());
             item.put("createdAt", formatAsInstant(message.getCreatedAt()));
             messages.add(item);
         }
@@ -546,7 +550,8 @@ import java.util.concurrent.RejectedExecutionException;
         push.put("seq", message.getSeq());
         push.put("serverMsgId", message.getServerMsgId());
         push.put("fromUserId", message.getFromUserId());
-        push.put("content", message.getContent());
+        push.put("msgType", MessageContentCodec.normalizeMsgType(message.getMsgType()));
+        MessageContentCodec.writeProtocolContent(push, "content", message.getMsgType(), message.getContent());
         push.put("createdAt", formatAsInstant(message.getCreatedAt()));
         return mapper.writeValueAsString(push);
     }
@@ -567,9 +572,12 @@ import java.util.concurrent.RejectedExecutionException;
             sendError(ch, "INVALID_PARAM", "targetUserId must be greater than 0");
             return;
         }
-        String content = node.path("content").asText("");
-        if (content == null || content.trim().isEmpty()) {
-            sendError(ch, "INVALID_PARAM", "content must not be blank");
+        String msgType = MessageContentCodec.normalizeMsgType(node.path("msgType").asText(null));
+        String content;
+        try {
+            content = MessageContentCodec.validateAndSerializeIncomingContent(msgType, node.get("content"));
+        } catch (IllegalArgumentException ex) {
+            sendError(ch, "INVALID_PARAM", ex.getMessage());
             return;
         }
         String normalizedClientMsgId = normalizeClientMsgId(node.path("clientMsgId").asText(null));
@@ -582,6 +590,7 @@ import java.util.concurrent.RejectedExecutionException;
         msg.setClientMsgId(normalizedClientMsgId);
         msg.setFromUserId(fromUserId);
         msg.setToUserId(target);
+        msg.setMsgType(msgType);
         msg.setContent(content);
         msg.setStatus("SENT");
 
@@ -828,7 +837,8 @@ import java.util.concurrent.RejectedExecutionException;
             item.put("clientMsgId", m.getClientMsgId());
             item.put("fromUserId", m.getFromUserId());
             item.put("toUserId", m.getToUserId());
-            item.put("content", m.getContent());
+            item.put("msgType", MessageContentCodec.normalizeMsgType(m.getMsgType()));
+            MessageContentCodec.writeProtocolContent(item, "content", m.getMsgType(), m.getContent());
             item.put("status", m.getStatus());
             item.put("createdAt", formatAsInstant(m.getCreatedAt()));
             arr.add(item);
@@ -920,7 +930,8 @@ import java.util.concurrent.RejectedExecutionException;
             mi.put("clientMsgId", m.getClientMsgId());
             mi.put("fromUserId", m.getFromUserId());
             mi.put("toUserId", m.getToUserId());
-            mi.put("content", m.getContent());
+            mi.put("msgType", MessageContentCodec.normalizeMsgType(m.getMsgType()));
+            MessageContentCodec.writeProtocolContent(mi, "content", m.getMsgType(), m.getContent());
             mi.put("status", m.getStatus());
             mi.put("createdAt", formatAsInstant(m.getCreatedAt()));
             arr.add(mi);

@@ -9,7 +9,7 @@ import java.util.List;
  */
 public interface GroupMessageService {
 
-    PersistResult persistTextMessage(Long groupId, Long fromUserId, String clientMsgId, String content);
+    PersistResult persistMessage(Long groupId, Long fromUserId, String clientMsgId, String msgType, String content);
 
     PullResult pullOffline(Long groupId, Long userId, Long cursorSeq, int limit);
 

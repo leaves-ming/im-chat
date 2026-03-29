@@ -7,6 +7,7 @@ import com.ming.imchatserver.dao.ContactDO;
 import com.ming.imchatserver.dao.GroupMessageDO;
 import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.mapper.DeliveryMapper;
+import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.netty.GroupPushCoordinator;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
@@ -22,6 +23,7 @@ import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -203,6 +205,24 @@ class WebSocketFrameHandlerIntegrationTest {
     }
 
     @Test
+    void pullOfflineShouldReturnStructuredFileMessage() throws Exception {
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        channel.attr(NettyAttr.USER_ID).set(2L);
+
+        MessageDO fileMessage = msg(10L, "sf-1", Date.from(Instant.parse("2026-03-25T00:00:00Z")), "cf-1");
+        fileMessage.setMsgType("FILE");
+        fileMessage.setContent("{\"fileId\":\"f10\",\"fileName\":\"spec.pdf\",\"size\":256,\"contentType\":\"application/pdf\",\"url\":\"/files/f10/spec.pdf\"}");
+        when(messageService.pullRecent(2L, 1)).thenReturn(pageResult(List.of(fileMessage), false));
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"PULL_OFFLINE\",\"limit\":1}"));
+        JsonNode resp = readOutboundJson(channel).get(0);
+
+        assertEquals("PULL_OFFLINE_RESULT", resp.get("type").asText());
+        assertEquals("FILE", resp.get("messages").get(0).get("msgType").asText());
+        assertEquals("f10", resp.get("messages").get(0).get("content").get("fileId").asText());
+    }
+
+    @Test
     /**
      * 方法说明。
      */
@@ -311,6 +331,26 @@ class WebSocketFrameHandlerIntegrationTest {
 
         assertEquals("SERVER_ACK", resp.get("type").asText());
         assertEquals("srv-sensitive-off", resp.get("serverMsgId").asText());
+    }
+
+    @Test
+    void chatShouldSupportFileMessage() throws Exception {
+        when(messageService.persistMessage(any(MessageDO.class))).thenReturn(new MessageService.PersistResult("srv-file-1", true));
+
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(
+                channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService));
+        channel.attr(NettyAttr.USER_ID).set(1L);
+
+        channel.writeInbound(new TextWebSocketFrame("""
+                {"type":"CHAT","targetUserId":2,"msgType":"FILE","content":{"fileId":"f1","fileName":"a.txt","size":12,"contentType":"text/plain","url":"/files/f1/a.txt"}}
+                """));
+        JsonNode resp = readOutboundJson(channel).get(0);
+
+        assertEquals("SERVER_ACK", resp.get("type").asText());
+        ArgumentCaptor<MessageDO> captor = ArgumentCaptor.forClass(MessageDO.class);
+        verify(messageService).persistMessage(captor.capture());
+        assertEquals(MessageContentCodec.MSG_TYPE_FILE, captor.getValue().getMsgType());
+        assertTrue(captor.getValue().getContent().contains("\"fileId\":\"f1\""));
     }
 
     @Test
@@ -493,7 +533,7 @@ class WebSocketFrameHandlerIntegrationTest {
         saved.setFromUserId(1L);
         saved.setContent("hello-group");
         saved.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
-        when(groupMessageService.persistTextMessage(101L, 1L, "c-1", "hello-group"))
+        when(groupMessageService.persistMessage(101L, 1L, "c-1", "TEXT", "hello-group"))
                 .thenReturn(new GroupMessageService.PersistResult(saved));
 
         EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService));
@@ -513,9 +553,40 @@ class WebSocketFrameHandlerIntegrationTest {
     }
 
     @Test
+    void groupChatShouldPushStructuredFileMessage() throws Exception {
+        EmbeddedChannel user2Channel = new EmbeddedChannel();
+        when(channelUserManager.getChannels(2L)).thenReturn(List.of(user2Channel));
+        when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
+        when(groupService.listActiveMemberUserIds(101L)).thenReturn(List.of(2L));
+
+        GroupMessageDO saved = new GroupMessageDO();
+        saved.setGroupId(101L);
+        saved.setSeq(13L);
+        saved.setServerMsgId("g-srv-file");
+        saved.setFromUserId(1L);
+        saved.setMsgType("FILE");
+        saved.setContent("{\"fileId\":\"f1\",\"fileName\":\"a.txt\",\"size\":12,\"contentType\":\"text/plain\",\"url\":\"/files/f1/a.txt\"}");
+        saved.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
+        when(groupMessageService.persistMessage(eq(101L), eq(1L), eq("c-file"), eq("FILE"), any()))
+                .thenReturn(new GroupMessageService.PersistResult(saved));
+
+        EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService));
+        senderChannel.attr(NettyAttr.USER_ID).set(1L);
+
+        senderChannel.writeInbound(new TextWebSocketFrame("""
+                {"type":"GROUP_CHAT","groupId":101,"clientMsgId":"c-file","msgType":"FILE","content":{"fileId":"f1","fileName":"a.txt","size":12,"contentType":"text/plain","url":"/files/f1/a.txt"}}
+                """));
+
+        JsonNode pushed = readOutboundJson(user2Channel).get(0);
+        assertEquals("GROUP_MSG_PUSH", pushed.get("type").asText());
+        assertEquals("FILE", pushed.get("msgType").asText());
+        assertEquals("f1", pushed.get("content").get("fileId").asText());
+    }
+
+    @Test
     void groupChatShouldRejectWhenSensitiveWordHit() throws Exception {
         when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
-        when(groupMessageService.persistTextMessage(101L, 1L, null, "testban group")).thenThrow(new SensitiveWordHitException());
+        when(groupMessageService.persistMessage(101L, 1L, null, "TEXT", "testban group")).thenThrow(new SensitiveWordHitException());
 
         EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(
                 channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService));
@@ -526,7 +597,7 @@ class WebSocketFrameHandlerIntegrationTest {
 
         assertEquals("ERROR", error.get("type").asText());
         assertEquals("SENSITIVE_WORD_HIT", error.get("code").asText());
-        verify(groupMessageService).persistTextMessage(101L, 1L, null, "testban group");
+        verify(groupMessageService).persistMessage(101L, 1L, null, "TEXT", "testban group");
     }
 
     @Test
@@ -549,7 +620,7 @@ class WebSocketFrameHandlerIntegrationTest {
         saved.setFromUserId(1L);
         saved.setContent("parallel-batch");
         saved.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
-        when(groupMessageService.persistTextMessage(101L, 1L, null, "parallel-batch"))
+        when(groupMessageService.persistMessage(101L, 1L, null, "TEXT", "parallel-batch"))
                 .thenReturn(new GroupMessageService.PersistResult(saved));
 
         List<Runnable> submittedTasks = new ArrayList<>();
@@ -606,9 +677,9 @@ class WebSocketFrameHandlerIntegrationTest {
         second.setContent("m2");
         second.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:01Z")));
 
-        when(groupMessageService.persistTextMessage(101L, 1L, null, "m1"))
+        when(groupMessageService.persistMessage(101L, 1L, null, "TEXT", "m1"))
                 .thenReturn(new GroupMessageService.PersistResult(first));
-        when(groupMessageService.persistTextMessage(101L, 1L, null, "m2"))
+        when(groupMessageService.persistMessage(101L, 1L, null, "TEXT", "m2"))
                 .thenReturn(new GroupMessageService.PersistResult(second));
 
         List<Runnable> submittedTasks = new ArrayList<>();
@@ -661,7 +732,7 @@ class WebSocketFrameHandlerIntegrationTest {
         saved.setFromUserId(1L);
         saved.setContent("boom");
         saved.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
-        when(groupMessageService.persistTextMessage(101L, 1L, null, "boom"))
+        when(groupMessageService.persistMessage(101L, 1L, null, "TEXT", "boom"))
                 .thenReturn(new GroupMessageService.PersistResult(saved));
 
         EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService, Runnable::run));
@@ -693,7 +764,7 @@ class WebSocketFrameHandlerIntegrationTest {
         saved.setFromUserId(1L);
         saved.setContent("degrade");
         saved.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
-        when(groupMessageService.persistTextMessage(101L, 1L, null, "degrade"))
+        when(groupMessageService.persistMessage(101L, 1L, null, "TEXT", "degrade"))
                 .thenReturn(new GroupMessageService.PersistResult(saved));
 
         List<Runnable> acceptedTasks = new ArrayList<>();
@@ -739,7 +810,7 @@ class WebSocketFrameHandlerIntegrationTest {
 
         assertEquals("ERROR", error.get("type").asText());
         assertEquals("FORBIDDEN", error.get("code").asText());
-        verify(groupMessageService, never()).persistTextMessage(any(), any(), any(), any());
+        verify(groupMessageService, never()).persistMessage(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -758,7 +829,7 @@ class WebSocketFrameHandlerIntegrationTest {
         assertEquals("GROUP_QUIT_RESULT", out.get(0).get("type").asText());
         assertEquals("ERROR", out.get(1).get("type").asText());
         assertEquals("FORBIDDEN", out.get(1).get("code").asText());
-        verify(groupMessageService, never()).persistTextMessage(any(), any(), any(), any());
+        verify(groupMessageService, never()).persistMessage(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -791,6 +862,30 @@ class WebSocketFrameHandlerIntegrationTest {
         assertEquals(101L, result.get("groupId").asLong());
         assertEquals(2, result.get("messages").size());
         assertEquals(12L, result.get("nextCursorSeq").asLong());
+    }
+
+    @Test
+    void groupPullOfflineShouldReturnStructuredFileContent() throws Exception {
+        when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
+        GroupMessageDO fileMessage = new GroupMessageDO();
+        fileMessage.setGroupId(101L);
+        fileMessage.setSeq(31L);
+        fileMessage.setServerMsgId("g31");
+        fileMessage.setFromUserId(2L);
+        fileMessage.setMsgType("FILE");
+        fileMessage.setContent("{\"fileId\":\"f31\",\"fileName\":\"report.pdf\",\"size\":1024,\"contentType\":\"application/pdf\",\"url\":\"/files/f31/report.pdf\"}");
+        fileMessage.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
+        when(groupMessageService.pullOffline(101L, 1L, null, 1))
+                .thenReturn(new GroupMessageService.PullResult(List.of(fileMessage), false, 31L));
+
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        channel.attr(NettyAttr.USER_ID).set(1L);
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_PULL_OFFLINE\",\"groupId\":101,\"limit\":1}"));
+        JsonNode result = readOutboundJson(channel).get(0);
+
+        assertEquals("FILE", result.get("messages").get(0).get("msgType").asText());
+        assertEquals("f31", result.get("messages").get(0).get("content").get("fileId").asText());
     }
 
     @Test
@@ -836,6 +931,7 @@ class WebSocketFrameHandlerIntegrationTest {
         m.setClientMsgId(clientMsgId);
         m.setFromUserId(1L);
         m.setToUserId(2L);
+        m.setMsgType("TEXT");
         m.setContent("hi");
         m.setStatus("SENT");
         m.setCreatedAt(createdAt);

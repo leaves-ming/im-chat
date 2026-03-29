@@ -19,6 +19,8 @@ public class MessageDO {
     private Long fromUserId;
     /** 接收方用户 ID。 */
     private Long toUserId;
+    /** 消息类型（TEXT/FILE）。 */
+    private String msgType;
     /** 消息内容。 */
     private String content;
     /** 消息状态（SENT/DELIVERED/ACKED）。 */

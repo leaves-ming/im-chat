@@ -52,6 +52,8 @@ im/
 - `GROUP_CHAT` 采用预聚合在线 channel、分批异步推送与失败统计，降低大群推送对 I/O 线程的冲击。
 - Outbox 稳定性
 - backlog 口径包含 `NEW/FAILED/PROCESSING`，支持 `PROCESSING` 超时回收。
+- 文件消息（MVP）
+- 支持 `POST /api/file/upload` 本地上传，`CHAT / GROUP_CHAT` 支持 `FILE` 消息引用，离线补拉返回结构化文件内容。
 
 ## 3. 单聊流程闭环（当前实现）
 
@@ -84,8 +86,26 @@ im/
 {
   "type": "CHAT",
   "targetUserId": 2,
+  "msgType": "TEXT",
   "content": "hello",
   "clientMsgId": "c-10001"
+}
+```
+
+`CHAT` 文件消息
+```json
+{
+  "type": "CHAT",
+  "targetUserId": 2,
+  "msgType": "FILE",
+  "content": {
+    "fileId": "f_123456",
+    "fileName": "design.pdf",
+    "size": 34567,
+    "contentType": "application/pdf",
+    "url": "/files/f_123456/design.pdf"
+  },
+  "clientMsgId": "c-file-10001"
 }
 ```
 
@@ -158,6 +178,7 @@ im/
 {
   "type": "CHAT_DELIVER",
   "fromUserId": 1,
+  "msgType": "TEXT",
   "content": "hello",
   "clientMsgId": "c-10001",
   "serverMsgId": "d0f7..."
@@ -325,6 +346,7 @@ CREATE DATABASE IF NOT EXISTS im_chat DEFAULT CHARACTER SET utf8mb4;
 - `spring.datasource.url/username/password`
 - `im.auth.jwt.secret`（必须替换）
 - `im.netty.port`（默认 `8080`）
+- `im.netty.max-content-length`（默认 `10485760`，需覆盖文件上传请求体）
 - `im.netty.single-chat-require-active-contact`（默认 `false`，开启后要求双方 ACTIVE 联系关系）
 - `im.netty.group-push-batch-size`（默认 `200`，群推送单批 channel 数）
 - `im.netty.group-push-parallelism`（默认 `4`，群推送调度线程并行度）
@@ -334,6 +356,11 @@ CREATE DATABASE IF NOT EXISTS im_chat DEFAULT CHARACTER SET utf8mb4;
 - `im.sensitive.mode`（默认 `REJECT`，支持 `REJECT` / `REPLACE`）
 - `im.sensitive.word-source`（默认 `classpath:sensitive_words.txt`）
 - `im.sensitive.fail-open`（默认 `true`，词库加载失败时是否放行）
+- `im.file.local-base-dir`（默认 `data/uploads`，本地文件存储目录）
+- `im.file.public-url-prefix`（默认 `/files`，本地文件公开访问前缀）
+- `im.file.max-file-size-bytes`（默认 `10485760`，单文件大小限制）
+- `im.file.allowed-content-types`（允许上传的 MIME 类型）
+- `im.file.allowed-extensions`（允许上传的扩展名）
 
 ## 5.4 启动服务
 
@@ -361,6 +388,13 @@ wscat -c 'ws://127.0.0.1:8080/ws' \
 3. 发送一条单聊消息：
 ```json
 {"type":"CHAT","targetUserId":2,"content":"hello","clientMsgId":"c-10001"}
+```
+
+4. 上传文件：
+```bash
+curl -X POST 'http://127.0.0.1:8080/api/file/upload' \
+  -H 'Authorization: Bearer <TOKEN>' \
+  -F 'file=@./design.pdf'
 ```
 
 ## 6. 测试
@@ -413,10 +447,61 @@ mvn -pl im-chat-server test
 {"type":"GROUP_CHAT","groupId":101,"content":"hello *******","clientMsgId":"g-30001"}
 ```
 
-## 9. 演进路线
+## 9. 文件消息示例
+
+上传响应：
+```json
+{
+  "code": 0,
+  "msg": "ok",
+  "data": {
+    "fileId": "f_123456",
+    "fileName": "design.pdf",
+    "contentType": "application/pdf",
+    "size": 34567,
+    "url": "/files/f_123456/design.pdf"
+  }
+}
+```
+
+单聊文件消息：
+```json
+{
+  "type": "CHAT",
+  "targetUserId": 2,
+  "msgType": "FILE",
+  "content": {
+    "fileId": "f_123456",
+    "fileName": "design.pdf",
+    "size": 34567,
+    "contentType": "application/pdf",
+    "url": "/files/f_123456/design.pdf"
+  },
+  "clientMsgId": "c-file-10001"
+}
+```
+
+群聊文件消息：
+```json
+{
+  "type": "GROUP_CHAT",
+  "groupId": 101,
+  "msgType": "FILE",
+  "content": {
+    "fileId": "f_123456",
+    "fileName": "design.pdf",
+    "size": 34567,
+    "contentType": "application/pdf",
+    "url": "/files/f_123456/design.pdf"
+  },
+  "clientMsgId": "g-file-20001"
+}
+```
+
+## 10. 演进路线
 
 推荐按以下顺序推进：
 
 1. 先稳定单机单聊闭环（协议、幂等、ACK、离线补拉）。
-2. 再做群聊、文件消息、敏感词等功能扩展。
+2. 再做群聊、敏感词等能力扩展。
 3. 最后做分布式路由（Redis 在线状态 + MQ 解耦推送）。

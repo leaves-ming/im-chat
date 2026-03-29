@@ -8,6 +8,7 @@
     <result property="clientMsgId" column="client_msg_id" />
     <result property="fromUserId" column="from_user_id" />
     <result property="toUserId" column="to_user_id" />
+    <result property="msgType" column="msg_type" />
     <result property="content" column="content" />
     <result property="status" column="status" />
     <result property="createdAt" column="created_at" />
@@ -16,8 +17,8 @@
   </resultMap>
 
   <insert id="insert" parameterType="com.ming.imchatserver.dao.MessageDO" useGeneratedKeys="true" keyProperty="id">
-    INSERT INTO im_message (server_msg_id, client_msg_id, from_user_id, to_user_id, content, status)
-    VALUES (#{serverMsgId}, #{clientMsgId}, #{fromUserId}, #{toUserId}, #{content}, #{status})
+    INSERT INTO im_message (server_msg_id, client_msg_id, from_user_id, to_user_id, msg_type, content, status)
+    VALUES (#{serverMsgId}, #{clientMsgId}, #{fromUserId}, #{toUserId}, #{msgType}, #{content}, #{status})
   </insert>
 
   <select id="findByServerMsgId" parameterType="string" resultMap="MessageResult">

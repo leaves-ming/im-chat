@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ming.imchatserver.dao.GroupMessageDO;
 import com.ming.imchatserver.mapper.GroupCursorMapper;
 import com.ming.imchatserver.mapper.GroupMessageMapper;
+import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.sensitive.SensitiveWordFilterResult;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
 import com.ming.imchatserver.sensitive.SensitiveWordService;
@@ -42,9 +43,10 @@ public class GroupMessageServiceImpl implements GroupMessageService {
     }
 
     @Override
-    public PersistResult persistTextMessage(Long groupId, Long fromUserId, String clientMsgId, String content) {
+    public PersistResult persistMessage(Long groupId, Long fromUserId, String clientMsgId, String msgType, String content) {
+        String normalizedMsgType = MessageContentCodec.normalizeMsgType(msgType);
         String filteredContent = content;
-        if (sensitiveWordService != null) {
+        if (sensitiveWordService != null && MessageContentCodec.MSG_TYPE_TEXT.equals(normalizedMsgType)) {
             SensitiveWordFilterResult filterResult = sensitiveWordService.filter(content);
             if (filterResult.shouldReject()) {
                 throw new SensitiveWordHitException(filterResult.getMatchedWord());
@@ -53,7 +55,7 @@ public class GroupMessageServiceImpl implements GroupMessageService {
         }
         for (int attempt = 1; attempt <= MAX_SEQ_ALLOCATE_RETRY; attempt++) {
             try {
-                return tryPersistTextMessage(groupId, fromUserId, clientMsgId, filteredContent);
+                return tryPersistMessage(groupId, fromUserId, clientMsgId, normalizedMsgType, filteredContent);
             } catch (DuplicateKeyException ex) {
                 // uk_group_seq 并发冲突时重试分配 seq。
                 logger.warn("persistTextMessage duplicate seq conflict, retry attempt={} groupId={}", attempt, groupId);
@@ -63,7 +65,7 @@ public class GroupMessageServiceImpl implements GroupMessageService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    protected PersistResult tryPersistTextMessage(Long groupId, Long fromUserId, String clientMsgId, String content) {
+    protected PersistResult tryPersistMessage(Long groupId, Long fromUserId, String clientMsgId, String msgType, String content) {
         Long maxSeq = groupMessageMapper.findMaxSeq(groupId);
         long nextSeq = (maxSeq == null ? 0L : maxSeq) + 1L;
 
@@ -74,8 +76,8 @@ public class GroupMessageServiceImpl implements GroupMessageService {
         message.setServerMsgId(UUID.randomUUID().toString());
         message.setClientMsgId(normalizeClientMsgId(clientMsgId));
         message.setFromUserId(fromUserId);
-        message.setMsgType("TEXT");
-        message.setContent(toJsonText(content));
+        message.setMsgType(msgType);
+        message.setContent(toStoredContent(msgType, content));
         message.setStatus(1);
         message.setCreatedAt(now);
 
@@ -108,8 +110,8 @@ public class GroupMessageServiceImpl implements GroupMessageService {
             decoded.setServerMsgId(item.getServerMsgId());
             decoded.setClientMsgId(item.getClientMsgId());
             decoded.setFromUserId(item.getFromUserId());
-            decoded.setMsgType(item.getMsgType());
-            decoded.setContent(fromJsonText(item.getContent()));
+            decoded.setMsgType(MessageContentCodec.normalizeMsgType(item.getMsgType()));
+            decoded.setContent(fromStoredContent(decoded.getMsgType(), item.getContent()));
             decoded.setStatus(item.getStatus());
             decoded.setCreatedAt(item.getCreatedAt());
             messages.add(decoded);
@@ -131,22 +133,18 @@ public class GroupMessageServiceImpl implements GroupMessageService {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
-    private String toJsonText(String plainText) {
+    private String toStoredContent(String msgType, String content) {
+        if (MessageContentCodec.MSG_TYPE_FILE.equals(MessageContentCodec.normalizeMsgType(msgType))) {
+            return content;
+        }
         try {
-            return objectMapper.writeValueAsString(plainText);
+            return objectMapper.writeValueAsString(content);
         } catch (Exception ex) {
             throw new IllegalStateException("serialize group content failed", ex);
         }
     }
 
-    private String fromJsonText(String rawContent) {
-        if (rawContent == null) {
-            return null;
-        }
-        try {
-            return objectMapper.readValue(rawContent, String.class);
-        } catch (Exception ex) {
-            return rawContent;
-        }
+    private String fromStoredContent(String msgType, String rawContent) {
+        return MessageContentCodec.decodeFromStorage(msgType, rawContent);
     }
 }

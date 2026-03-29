@@ -2,6 +2,7 @@ package com.ming.imchatserver.mq;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.netty.ChannelUserManager;
 import io.netty.channel.Channel;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
@@ -38,10 +39,11 @@ public class DispatchPushService {
         deliver.put("type", "CHAT_DELIVER");
         deliver.put("fromUserId", payload.getFromUserId());
         deliver.put("toUserId", payload.getToUserId());
-        deliver.put("content", payload.getContent());
         deliver.put("clientMsgId", payload.getClientMsgId());
         deliver.put("serverMsgId", payload.getServerMsgId());
-        deliver.put("msgType", payload.getMsgType() == null ? "TEXT" : payload.getMsgType());
+        String msgType = MessageContentCodec.normalizeMsgType(payload.getMsgType());
+        deliver.put("msgType", msgType);
+        MessageContentCodec.writeProtocolContent(deliver, "content", msgType, payload.getContent());
 
         String text = mapper.writeValueAsString(deliver);
         for (Channel channel : targets) {

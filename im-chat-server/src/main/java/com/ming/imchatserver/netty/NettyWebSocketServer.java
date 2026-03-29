@@ -1,6 +1,8 @@
 package com.ming.imchatserver.netty;
 
+import com.ming.imchatserver.config.FileStorageProperties;
 import com.ming.imchatserver.config.NettyProperties;
+import com.ming.imchatserver.file.FileStorageService;
 import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.service.AuthService;
@@ -42,6 +44,8 @@ public class NettyWebSocketServer {
     private final GroupMessageService groupMessageService;
     private final DeliveryMapper deliveryMapper;
     private final MetricsService metricsService;
+    private final FileStorageService fileStorageService;
+    private final FileStorageProperties fileStorageProperties;
     private final Executor groupPushExecutor;
     private final GroupPushCoordinator groupPushCoordinator;
 
@@ -67,6 +71,8 @@ public class NettyWebSocketServer {
                                 GroupMessageService groupMessageService,
                                 DeliveryMapper deliveryMapper,
                                 MetricsService metricsService,
+                                FileStorageService fileStorageService,
+                                FileStorageProperties fileStorageProperties,
                                 @Qualifier("groupPushExecutor") Executor groupPushExecutor,
                                 GroupPushCoordinator groupPushCoordinator) {
         this.properties = properties;
@@ -78,6 +84,8 @@ public class NettyWebSocketServer {
         this.groupMessageService = groupMessageService;
         this.deliveryMapper = deliveryMapper;
         this.metricsService = metricsService;
+        this.fileStorageService = fileStorageService;
+        this.fileStorageProperties = fileStorageProperties;
         this.groupPushExecutor = groupPushExecutor;
         this.groupPushCoordinator = groupPushCoordinator;
     }
@@ -95,7 +103,7 @@ public class NettyWebSocketServer {
         b.group(bossGroup, workerGroup)
                 .channel(NioServerSocketChannel.class)
                 .localAddress(new InetSocketAddress(properties.getPort()))
-                .childHandler(new NettyServerInitializer(properties, authService, channelUserManager, messageService, contactService, groupService, groupMessageService, deliveryMapper, metricsService, groupPushExecutor, groupPushCoordinator));
+                .childHandler(new NettyServerInitializer(properties, authService, channelUserManager, messageService, contactService, groupService, groupMessageService, deliveryMapper, metricsService, fileStorageService, fileStorageProperties, groupPushExecutor, groupPushCoordinator));
         serverChannel = b.bind().sync().channel();
         logger.info("Netty server started and listening on {}", properties.getPort());
     }

@@ -8,6 +8,7 @@ import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.dao.OutboxMessageDO;
 import com.ming.imchatserver.mapper.MessageMapper;
 import com.ming.imchatserver.mapper.OutboxMapper;
+import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.mq.DispatchMessagePayload;
 import com.ming.imchatserver.sensitive.SensitiveWordFilterResult;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
@@ -80,27 +81,35 @@ public class MessageServiceImpl implements MessageService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public PersistResult persistMessage(MessageDO msg) {
-        if (sensitiveWordService != null) {
+        String msgType = msg == null ? MessageContentCodec.MSG_TYPE_TEXT : MessageContentCodec.normalizeMsgType(msg.getMsgType());
+        String logicalContent = msg == null ? null : msg.getContent();
+        if (sensitiveWordService != null && MessageContentCodec.MSG_TYPE_TEXT.equals(msgType)) {
             SensitiveWordFilterResult filterResult = sensitiveWordService.filter(msg == null ? null : msg.getContent());
             if (filterResult.shouldReject()) {
                 throw new SensitiveWordHitException(filterResult.getMatchedWord());
             }
-            if (msg != null) {
-                msg.setContent(filterResult.getOutputText());
-            }
+            logicalContent = filterResult.getOutputText();
+        }
+        if (msg != null) {
+            msg.setMsgType(msgType);
+            msg.setContent(logicalContent);
         }
         msg.setClientMsgId(normalizeClientMsgId(msg.getClientMsgId()));
 
         String serverMsgId = UUID.randomUUID().toString();
         msg.setServerMsgId(serverMsgId);
         msg.setStatus(msg.getStatus() == null ? "SENT" : msg.getStatus());
+        String storedContent = MessageContentCodec.encodeForStorage(msgType, logicalContent);
 
         try {
+            msg.setContent(storedContent);
             messageMapper.insert(msg);
-            appendOutbox(msg);
+            msg.setContent(logicalContent);
+            appendOutbox(msg, logicalContent);
             logger.info("persistMessage: inserted new message serverMsgId={} from={} to={}", serverMsgId, msg.getFromUserId(), msg.getToUserId());
             return new PersistResult(serverMsgId, true);
         } catch (DuplicateKeyException ex) {
+            msg.setContent(logicalContent);
             if (msg.getClientMsgId() != null) {
                 MessageDO exist = messageMapper.findByFromUserIdAndClientMsgId(msg.getFromUserId(), msg.getClientMsgId());
                 if (exist != null) {
@@ -116,7 +125,7 @@ public class MessageServiceImpl implements MessageService {
     /**
      * 在消息事务内写 outbox，保证“落库成功 => 最终可分发”。
      */
-    private void appendOutbox(MessageDO msg) {
+    private void appendOutbox(MessageDO msg, String logicalContent) {
         if (outboxMapper == null) {
             return;
         }
@@ -127,8 +136,8 @@ public class MessageServiceImpl implements MessageService {
             payload.setClientMsgId(msg.getClientMsgId());
             payload.setFromUserId(msg.getFromUserId());
             payload.setToUserId(msg.getToUserId());
-            payload.setContent(msg.getContent());
-            payload.setMsgType("TEXT");
+            payload.setContent(logicalContent);
+            payload.setMsgType(msg.getMsgType());
 
             OutboxMessageDO outbox = new OutboxMessageDO();
             outbox.setEventId(payload.getEventId());
@@ -231,7 +240,7 @@ public class MessageServiceImpl implements MessageService {
         if (serverMsgId == null) {
             return null;
         }
-        return messageMapper.findByServerMsgId(serverMsgId);
+        return decodeMessage(messageMapper.findByServerMsgId(serverMsgId));
     }
 
     /**
@@ -263,7 +272,10 @@ public class MessageServiceImpl implements MessageService {
         boolean hasMore = fetched.size() > limit;
         List<MessageDO> selected = hasMore ? fetched.subList(0, limit) : fetched;
 
-        List<MessageDO> messages = new ArrayList<>(selected);
+        List<MessageDO> messages = new ArrayList<>(selected.size());
+        for (MessageDO item : selected) {
+            messages.add(decodeMessage(item));
+        }
         if (reverseToAsc) {
             Collections.reverse(messages);
         }
@@ -277,5 +289,24 @@ public class MessageServiceImpl implements MessageService {
         }
 
         return new CursorPageResult(messages, hasMore, nextCursorCreatedAt, nextCursorId);
+    }
+
+    private MessageDO decodeMessage(MessageDO message) {
+        if (message == null) {
+            return null;
+        }
+        MessageDO decoded = new MessageDO();
+        decoded.setId(message.getId());
+        decoded.setServerMsgId(message.getServerMsgId());
+        decoded.setClientMsgId(message.getClientMsgId());
+        decoded.setFromUserId(message.getFromUserId());
+        decoded.setToUserId(message.getToUserId());
+        decoded.setMsgType(MessageContentCodec.normalizeMsgType(message.getMsgType()));
+        decoded.setContent(MessageContentCodec.decodeFromStorage(decoded.getMsgType(), message.getContent()));
+        decoded.setStatus(message.getStatus());
+        decoded.setCreatedAt(message.getCreatedAt());
+        decoded.setDeliveredAt(message.getDeliveredAt());
+        decoded.setAckedAt(message.getAckedAt());
+        return decoded;
     }
 }
