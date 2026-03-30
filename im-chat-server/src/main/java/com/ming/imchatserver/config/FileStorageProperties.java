@@ -22,6 +22,10 @@ public class FileStorageProperties {
     private String publicUrlPrefix = "/files";
     /** 最大文件大小，单位字节。 */
     private long maxFileSizeBytes = 10 * 1024 * 1024L;
+    /** 上传凭证有效期（秒）。 */
+    private long uploadTokenExpireSeconds = 900L;
+    /** 是否允许 owner 不依赖消息关系直接下载。 */
+    private boolean allowOwnerDownloadWithoutMessage = true;
     /** 允许的 content type 列表，空表示不限制。 */
     private List<String> allowedContentTypes = new ArrayList<>();
     /** 允许的扩展名列表，空表示不限制。 */
