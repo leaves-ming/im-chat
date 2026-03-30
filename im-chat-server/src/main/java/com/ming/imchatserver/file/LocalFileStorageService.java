@@ -1,15 +1,15 @@
 package com.ming.imchatserver.file;
 
 import com.ming.imchatserver.config.FileStorageProperties;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.util.Locale;
-import java.util.UUID;
 
 /**
  * 本地文件存储实现。
@@ -24,38 +24,26 @@ public class LocalFileStorageService implements FileStorageService {
     }
 
     @Override
-    public FileMetadata store(String fileName, String contentType, byte[] bytes) {
-        String sanitizedName = sanitizeFileName(fileName);
-        String normalizedContentType = normalizeContentType(contentType);
-        String fileId = UUID.randomUUID().toString().replace("-", "");
-        Path filePath = resolveFilePath(fileId, sanitizedName);
+    public void store(String storageKey, InputStream inputStream) {
+        Path filePath = resolveStoragePath(storageKey);
         try {
             Files.createDirectories(filePath.getParent());
-            Files.write(filePath, bytes);
+            Files.copy(inputStream, filePath, StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException ex) {
-            throw new IllegalStateException("store file failed: " + sanitizedName, ex);
+            throw new IllegalStateException("store file failed: " + storageKey, ex);
         }
-        return new FileMetadata(
-                fileId,
-                sanitizedName,
-                normalizedContentType,
-                bytes == null ? 0L : bytes.length,
-                buildPublicUrl(fileId, sanitizedName)
-        );
     }
 
     @Override
-    public StoredFileResource load(String fileId, String fileName) {
-        String sanitizedName = sanitizeFileName(fileName);
-        Path filePath = resolveFilePath(fileId, sanitizedName);
+    public StoredFileResource load(String storageKey, String fileName, String contentType) {
+        Path filePath = resolveStoragePath(storageKey);
         if (!Files.exists(filePath) || !Files.isRegularFile(filePath)) {
             return null;
         }
         try {
-            String detected = Files.probeContentType(filePath);
-            return new StoredFileResource(filePath, sanitizedName, normalizeContentType(detected), Files.size(filePath));
+            return new StoredFileResource(filePath, sanitizeFileName(fileName), normalizeContentType(contentType), Files.size(filePath));
         } catch (IOException ex) {
-            throw new IllegalStateException("load file failed: " + fileId, ex);
+            throw new IllegalStateException("load file failed: " + storageKey, ex);
         }
     }
 
@@ -86,21 +74,19 @@ public class LocalFileStorageService implements FileStorageService {
         return (contentType == null || contentType.isBlank()) ? "application/octet-stream" : contentType;
     }
 
-    private String buildPublicUrl(String fileId, String fileName) {
-        String prefix = properties.getPublicUrlPrefix();
-        if (prefix == null || prefix.isBlank()) {
-            prefix = "/files";
+    private Path resolveStoragePath(String storageKey) {
+        if (storageKey == null || storageKey.isBlank()) {
+            throw new IllegalArgumentException("storageKey must not be blank");
         }
-        if (!prefix.startsWith("/")) {
-            prefix = "/" + prefix;
+        String normalized = storageKey.replace("\\", "/");
+        while (normalized.startsWith("/")) {
+            normalized = normalized.substring(1);
         }
-        if (prefix.endsWith("/")) {
-            prefix = prefix.substring(0, prefix.length() - 1);
+        Path base = Path.of(properties.getLocalBaseDir()).toAbsolutePath().normalize();
+        Path resolved = base.resolve(normalized).normalize();
+        if (!resolved.startsWith(base)) {
+            throw new IllegalArgumentException("invalid storageKey");
         }
-        return prefix + "/" + fileId + "/" + fileName;
-    }
-
-    private Path resolveFilePath(String fileId, String fileName) {
-        return Path.of(properties.getLocalBaseDir(), fileId, fileName);
+        return resolved;
     }
 }

@@ -13,6 +13,7 @@ import com.ming.imchatserver.mq.DispatchMessagePayload;
 import com.ming.imchatserver.sensitive.SensitiveWordFilterResult;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
 import com.ming.imchatserver.sensitive.SensitiveWordService;
+import com.ming.imchatserver.service.FileService;
 import com.ming.imchatserver.service.MessageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,6 +43,7 @@ public class MessageServiceImpl implements MessageService {
     private final OutboxMapper outboxMapper;
     private final ReliabilityProperties reliabilityProperties;
     private final SensitiveWordService sensitiveWordService;
+    private final FileService fileService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
@@ -51,25 +53,27 @@ public class MessageServiceImpl implements MessageService {
     public MessageServiceImpl(MessageMapper messageMapper,
                               OutboxMapper outboxMapper,
                               ReliabilityProperties reliabilityProperties,
-                              SensitiveWordService sensitiveWordService) {
+                              SensitiveWordService sensitiveWordService,
+                              FileService fileService) {
         this.messageMapper = messageMapper;
         this.outboxMapper = outboxMapper;
         this.reliabilityProperties = reliabilityProperties;
         this.sensitiveWordService = sensitiveWordService;
+        this.fileService = fileService;
     }
 
     /**
      * 单元测试兼容构造函数。
      */
     public MessageServiceImpl(MessageMapper messageMapper) {
-        this(messageMapper, null, null, null);
+        this(messageMapper, null, null, null, null);
     }
 
     /**
      * 单元测试兼容构造函数（含 outbox）。
      */
     public MessageServiceImpl(MessageMapper messageMapper, OutboxMapper outboxMapper) {
-        this(messageMapper, outboxMapper, null, null);
+        this(messageMapper, outboxMapper, null, null, null);
     }
 
     /**
@@ -95,6 +99,13 @@ public class MessageServiceImpl implements MessageService {
             msg.setContent(logicalContent);
         }
         msg.setClientMsgId(normalizeClientMsgId(msg.getClientMsgId()));
+        if (MessageContentCodec.MSG_TYPE_FILE.equals(msgType)) {
+            if (fileService == null) {
+                throw new IllegalStateException("file service unavailable");
+            }
+            logicalContent = fileService.consumeUploadTokenAndBuildFileMessageContent(logicalContent, msg.getFromUserId());
+            msg.setContent(logicalContent);
+        }
 
         String serverMsgId = UUID.randomUUID().toString();
         msg.setServerMsgId(serverMsgId);

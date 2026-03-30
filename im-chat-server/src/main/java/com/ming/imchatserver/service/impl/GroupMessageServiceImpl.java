@@ -8,6 +8,7 @@ import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.sensitive.SensitiveWordFilterResult;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
 import com.ming.imchatserver.sensitive.SensitiveWordService;
+import com.ming.imchatserver.service.FileService;
 import com.ming.imchatserver.service.GroupMessageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,14 +33,17 @@ public class GroupMessageServiceImpl implements GroupMessageService {
     private final GroupMessageMapper groupMessageMapper;
     private final GroupCursorMapper groupCursorMapper;
     private final SensitiveWordService sensitiveWordService;
+    private final FileService fileService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public GroupMessageServiceImpl(GroupMessageMapper groupMessageMapper,
                                    GroupCursorMapper groupCursorMapper,
-                                   SensitiveWordService sensitiveWordService) {
+                                   SensitiveWordService sensitiveWordService,
+                                   FileService fileService) {
         this.groupMessageMapper = groupMessageMapper;
         this.groupCursorMapper = groupCursorMapper;
         this.sensitiveWordService = sensitiveWordService;
+        this.fileService = fileService;
     }
 
     @Override
@@ -52,6 +56,12 @@ public class GroupMessageServiceImpl implements GroupMessageService {
                 throw new SensitiveWordHitException(filterResult.getMatchedWord());
             }
             filteredContent = filterResult.getOutputText();
+        }
+        if (MessageContentCodec.MSG_TYPE_FILE.equals(normalizedMsgType)) {
+            if (fileService == null) {
+                throw new IllegalStateException("file service unavailable");
+            }
+            filteredContent = fileService.consumeUploadTokenAndBuildFileMessageContent(filteredContent, fromUserId);
         }
         for (int attempt = 1; attempt <= MAX_SEQ_ALLOCATE_RETRY; attempt++) {
             try {

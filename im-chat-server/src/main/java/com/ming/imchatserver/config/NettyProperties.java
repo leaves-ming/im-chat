@@ -29,7 +29,7 @@ public class NettyProperties {
     /** 总空闲阈值（秒）。 */
     private int allIdleSeconds = 120;
     /** HTTP 聚合器最大内容长度。 */
-    private int maxContentLength = 65536;
+    private int maxContentLength = 10 * 1024 * 1024;
     /** JWT token 过期时间（秒）。 */
     private long tokenExpireSeconds = 3600;
 

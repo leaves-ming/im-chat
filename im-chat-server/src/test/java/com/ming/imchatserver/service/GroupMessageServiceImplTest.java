@@ -8,6 +8,7 @@ import com.ming.imchatserver.sensitive.SensitiveWordFilterResult;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
 import com.ming.imchatserver.sensitive.SensitiveWordMode;
 import com.ming.imchatserver.sensitive.SensitiveWordService;
+import com.ming.imchatserver.service.FileService;
 import com.ming.imchatserver.service.impl.GroupMessageServiceImpl;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -38,7 +39,7 @@ class GroupMessageServiceImplTest {
     void persistMessageShouldRetryWhenSeqConflict() {
         GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
         GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
-        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, null);
+        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, null, null);
 
         when(groupMessageMapper.findMaxSeq(101L)).thenReturn(9L, 10L);
         when(groupMessageMapper.insert(any(GroupMessageDO.class)))
@@ -60,7 +61,7 @@ class GroupMessageServiceImplTest {
     void pullOfflineShouldKeepAscAndAdvanceCursorWithHasMore() {
         GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
         GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
-        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, null);
+        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, null, null);
 
         when(groupCursorMapper.findLastPullSeq(101L, 2L)).thenReturn(20L);
         when(groupMessageMapper.findAfterSeq(101L, 20L, 3)).thenReturn(List.of(
@@ -85,7 +86,7 @@ class GroupMessageServiceImplTest {
     void pullOfflineShouldPersistBaseCursorWhenNoNewMessages() {
         GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
         GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
-        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, null);
+        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, null, null);
 
         when(groupCursorMapper.findLastPullSeq(101L, 2L)).thenReturn(35L);
         when(groupMessageMapper.findAfterSeq(101L, 35L, 3)).thenReturn(List.of());
@@ -103,7 +104,7 @@ class GroupMessageServiceImplTest {
         GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
         GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
         SensitiveWordService sensitiveWordService = mock(SensitiveWordService.class);
-        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, sensitiveWordService);
+        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, sensitiveWordService, null);
 
         when(sensitiveWordService.filter("badword"))
                 .thenReturn(new SensitiveWordFilterResult(true, SensitiveWordMode.REJECT, "badword", "badword"));
@@ -118,7 +119,7 @@ class GroupMessageServiceImplTest {
         GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
         GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
         SensitiveWordService sensitiveWordService = mock(SensitiveWordService.class);
-        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, sensitiveWordService);
+        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, sensitiveWordService, null);
         AtomicReference<String> insertedContent = new AtomicReference<>();
 
         when(groupMessageMapper.findMaxSeq(101L)).thenReturn(3L);
@@ -141,7 +142,8 @@ class GroupMessageServiceImplTest {
         GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
         GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
         SensitiveWordService sensitiveWordService = mock(SensitiveWordService.class);
-        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, sensitiveWordService);
+        FileService fileService = mock(FileService.class);
+        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, sensitiveWordService, fileService);
         AtomicReference<String> insertedContent = new AtomicReference<>();
 
         when(groupMessageMapper.findMaxSeq(101L)).thenReturn(7L);
@@ -151,13 +153,16 @@ class GroupMessageServiceImplTest {
             return 1;
         }).when(groupMessageMapper).insert(any(GroupMessageDO.class));
 
-        String fileContent = "{\"fileId\":\"f1\",\"fileName\":\"a.txt\",\"size\":12,\"contentType\":\"text/plain\",\"url\":\"/files/f1/a.txt\"}";
+        String normalizedFileContent = "{\"fileId\":\"f1\",\"fileName\":\"a.txt\",\"size\":12,\"contentType\":\"text/plain\",\"url\":\"/files/f1\"}";
+        when(fileService.consumeUploadTokenAndBuildFileMessageContent("{\"uploadToken\":\"up-1\"}", 1L))
+                .thenReturn(normalizedFileContent);
+        String fileContent = "{\"uploadToken\":\"up-1\"}";
         GroupMessageService.PersistResult result = service.persistMessage(101L, 1L, null, "FILE", fileContent);
 
         verify(sensitiveWordService, never()).filter(any());
-        assertEquals(fileContent, insertedContent.get());
+        assertEquals(normalizedFileContent, insertedContent.get());
         assertEquals(MessageContentCodec.MSG_TYPE_FILE, result.getMessage().getMsgType());
-        assertEquals(fileContent, result.getMessage().getContent());
+        assertEquals(normalizedFileContent, result.getMessage().getContent());
     }
 
     private GroupMessageDO msg(Long seq, String rawContent) {

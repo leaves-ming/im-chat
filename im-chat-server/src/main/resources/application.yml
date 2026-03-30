@@ -69,7 +69,7 @@ im:
     reader-idle-seconds: 60
     writer-idle-seconds: 0
     all-idle-seconds: 120
-    max-content-length: 65536
+    max-content-length: ${im.file.max-file-size-bytes:10485760}
     token-expire-seconds: 3600
     offline-pull-max-limit: 200
     single-chat-require-active-contact: false
@@ -91,6 +91,12 @@ im:
     mode: REJECT
     word-source: classpath:sensitive_words.txt
     fail-open: true
+  file:
+    local-base-dir: data/uploads
+    public-url-prefix: /files
+    max-file-size-bytes: 10485760
+    upload-token-expire-seconds: 900
+    allow-owner-download-without-message: true
   metrics:
     sample-fixed-delay-ms: 10000
     log-fixed-delay-ms: 60000

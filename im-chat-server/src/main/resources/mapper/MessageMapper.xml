@@ -61,4 +61,13 @@
     ORDER BY created_at DESC, id DESC
   </select>
 
+  <select id="existsFileParticipant" parameterType="map" resultType="int">
+    SELECT 1
+    FROM im_message
+    WHERE msg_type = 'FILE'
+      AND JSON_UNQUOTE(JSON_EXTRACT(CAST(content AS JSON), '$.fileId')) = #{fileId}
+      AND (from_user_id = #{userId} OR to_user_id = #{userId})
+    LIMIT 1
+  </select>
+
 </mapper>

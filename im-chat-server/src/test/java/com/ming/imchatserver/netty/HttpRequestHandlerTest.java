@@ -4,8 +4,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ming.imchatserver.config.FileStorageProperties;
 import com.ming.imchatserver.config.NettyProperties;
-import com.ming.imchatserver.file.FileStorageService;
+import com.ming.imchatserver.file.FileAccessDeniedException;
+import com.ming.imchatserver.file.FileMetadata;
 import com.ming.imchatserver.service.AuthService;
+import com.ming.imchatserver.service.FileService;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.http.DefaultFullHttpRequest;
@@ -13,6 +15,7 @@ import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpVersion;
+import io.netty.handler.codec.http.HttpResponseStatus;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -40,7 +43,7 @@ class HttpRequestHandlerTest {
         fileStorageProperties.setLocalBaseDir(tempDir.toString());
         fileStorageProperties.setAllowedContentTypes(java.util.List.of("text/plain"));
         fileStorageProperties.setAllowedExtensions(java.util.List.of("txt"));
-        FileStorageService fileStorageService = new com.ming.imchatserver.file.LocalFileStorageService(fileStorageProperties);
+        FileService fileService = mock(FileService.class);
 
         AuthService.AuthUser authUser = new AuthService.AuthUser();
         authUser.userId = 1L;
@@ -48,7 +51,13 @@ class HttpRequestHandlerTest {
         when(authService.verifyToken("token-1")).thenReturn(true);
         when(authService.parseToken("token-1")).thenReturn(Optional.of(authUser));
 
-        EmbeddedChannel channel = new EmbeddedChannel(new HttpRequestHandler(nettyProperties, authService, null, fileStorageService, fileStorageProperties));
+        when(fileService.store(org.mockito.ArgumentMatchers.eq(1L),
+                org.mockito.ArgumentMatchers.eq("note.txt"),
+                org.mockito.ArgumentMatchers.eq("text/plain"),
+                org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.any())).thenReturn(new FileMetadata("up-1", "f_1", "note.txt", "text/plain", 10L, "/files/f_1"));
+
+        EmbeddedChannel channel = new EmbeddedChannel(new HttpRequestHandler(nettyProperties, authService, null, fileService, fileStorageProperties));
 
         String boundary = "----CodexBoundary";
         byte[] body = (
@@ -74,6 +83,7 @@ class HttpRequestHandlerTest {
         JsonNode json = mapper.readTree(response.content().toString(StandardCharsets.UTF_8));
 
         assertEquals(0, json.get("code").asInt());
+        assertEquals("up-1", json.get("data").get("uploadToken").asText());
         assertEquals("note.txt", json.get("data").get("fileName").asText());
         assertEquals("text/plain", json.get("data").get("contentType").asText());
         assertTrue(json.get("data").get("url").asText().contains("/files/"));
@@ -85,9 +95,9 @@ class HttpRequestHandlerTest {
         AuthService authService = mock(AuthService.class);
         FileStorageProperties fileStorageProperties = new FileStorageProperties();
         fileStorageProperties.setLocalBaseDir(tempDir.toString());
-        FileStorageService fileStorageService = new com.ming.imchatserver.file.LocalFileStorageService(fileStorageProperties);
+        FileService fileService = mock(FileService.class);
 
-        EmbeddedChannel channel = new EmbeddedChannel(new HttpRequestHandler(nettyProperties, authService, null, fileStorageService, fileStorageProperties));
+        EmbeddedChannel channel = new EmbeddedChannel(new HttpRequestHandler(nettyProperties, authService, null, fileService, fileStorageProperties));
         byte[] body = "bad".getBytes(StandardCharsets.UTF_8);
         DefaultFullHttpRequest request = new DefaultFullHttpRequest(
                 HttpVersion.HTTP_1_1,
@@ -103,5 +113,50 @@ class HttpRequestHandlerTest {
         JsonNode json = mapper.readTree(response.content().toString(StandardCharsets.UTF_8));
 
         assertEquals(401, json.get("code").asInt());
+    }
+
+    @Test
+    void downloadShouldRejectWhenMissingToken() {
+        NettyProperties nettyProperties = new NettyProperties();
+        AuthService authService = mock(AuthService.class);
+        FileStorageProperties fileStorageProperties = new FileStorageProperties();
+        FileService fileService = mock(FileService.class);
+
+        EmbeddedChannel channel = new EmbeddedChannel(new HttpRequestHandler(nettyProperties, authService, null, fileService, fileStorageProperties));
+        DefaultFullHttpRequest request = new DefaultFullHttpRequest(
+                HttpVersion.HTTP_1_1,
+                HttpMethod.GET,
+                "/files/f_1"
+        );
+
+        channel.writeInbound(request);
+        FullHttpResponse response = channel.readOutbound();
+        assertEquals(HttpResponseStatus.UNAUTHORIZED, response.status());
+    }
+
+    @Test
+    void downloadShouldReturnForbiddenWhenUnauthorizedAccess() {
+        NettyProperties nettyProperties = new NettyProperties();
+        AuthService authService = mock(AuthService.class);
+        FileStorageProperties fileStorageProperties = new FileStorageProperties();
+        FileService fileService = mock(FileService.class);
+
+        AuthService.AuthUser authUser = new AuthService.AuthUser();
+        authUser.userId = 1L;
+        when(authService.verifyToken("token-1")).thenReturn(true);
+        when(authService.parseToken("token-1")).thenReturn(Optional.of(authUser));
+        when(fileService.loadAuthorizedFile(1L, "f_1")).thenThrow(new FileAccessDeniedException("forbidden"));
+
+        EmbeddedChannel channel = new EmbeddedChannel(new HttpRequestHandler(nettyProperties, authService, null, fileService, fileStorageProperties));
+        DefaultFullHttpRequest request = new DefaultFullHttpRequest(
+                HttpVersion.HTTP_1_1,
+                HttpMethod.GET,
+                "/files/f_1"
+        );
+        request.headers().set(HttpHeaderNames.AUTHORIZATION, "Bearer token-1");
+
+        channel.writeInbound(request);
+        FullHttpResponse response = channel.readOutbound();
+        assertEquals(HttpResponseStatus.FORBIDDEN, response.status());
     }
 }

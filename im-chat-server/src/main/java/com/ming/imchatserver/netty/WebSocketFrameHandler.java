@@ -12,9 +12,11 @@ import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.metrics.MetricsService;
+import com.ming.imchatserver.file.FileAccessDeniedException;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
 import com.ming.imchatserver.sensitive.SensitiveWordUnavailableException;
 import com.ming.imchatserver.service.ContactService;
+import com.ming.imchatserver.service.FileTokenBizException;
 import com.ming.imchatserver.service.GroupBizException;
 import com.ming.imchatserver.service.GroupMessageService;
 import com.ming.imchatserver.service.GroupService;
@@ -247,6 +249,12 @@ import java.util.concurrent.RejectedExecutionException;
             }
         } catch (GroupBizException ex) {
             sendError(ch, ex.getCode().name(), ex.getMessage());
+        } catch (FileTokenBizException ex) {
+            sendError(ch, ex.getCode(), ex.getMessage());
+        } catch (FileAccessDeniedException ex) {
+            sendError(ch, "FORBIDDEN", ex.getMessage());
+        } catch (IllegalArgumentException ex) {
+            sendError(ch, "INVALID_PARAM", ex.getMessage());
         } catch (SensitiveWordHitException ex) {
             sendError(ch, ex.getCode(), ex.getMessage());
         } catch (SensitiveWordUnavailableException ex) {

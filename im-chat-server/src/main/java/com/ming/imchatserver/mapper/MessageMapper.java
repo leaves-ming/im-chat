@@ -85,4 +85,9 @@ public interface MessageMapper {
      * @return 最近消息列表（created_at DESC, id DESC）
      */
     List<MessageDO> findRecentByToUserId(@Param("toUserId") Long toUserId);
+
+    /**
+     * 校验用户是否可访问某个单聊 FILE 消息。
+     */
+    Integer existsFileParticipant(@Param("fileId") String fileId, @Param("userId") Long userId);
 }

@@ -7,6 +7,7 @@ import com.ming.imchatserver.sensitive.SensitiveWordFilterResult;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
 import com.ming.imchatserver.sensitive.SensitiveWordMode;
 import com.ming.imchatserver.sensitive.SensitiveWordService;
+import com.ming.imchatserver.service.FileService;
 import com.ming.imchatserver.service.impl.MessageServiceImpl;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DuplicateKeyException;
@@ -159,7 +160,7 @@ class MessageServiceImplTest {
     void persistMessageShouldRejectSensitiveWordsBeforeInsert() {
         MessageMapper mapper = mock(MessageMapper.class);
         SensitiveWordService sensitiveWordService = mock(SensitiveWordService.class);
-        MessageServiceImpl service = new MessageServiceImpl(mapper, null, null, sensitiveWordService);
+        MessageServiceImpl service = new MessageServiceImpl(mapper, null, null, sensitiveWordService, null);
 
         MessageDO msg = new MessageDO();
         msg.setFromUserId(1L);
@@ -177,7 +178,7 @@ class MessageServiceImplTest {
     void persistMessageShouldReplaceSensitiveWordsBeforeInsert() {
         MessageMapper mapper = mock(MessageMapper.class);
         SensitiveWordService sensitiveWordService = mock(SensitiveWordService.class);
-        MessageServiceImpl service = new MessageServiceImpl(mapper, null, null, sensitiveWordService);
+        MessageServiceImpl service = new MessageServiceImpl(mapper, null, null, sensitiveWordService, null);
         AtomicReference<String> insertedContent = new AtomicReference<>();
 
         MessageDO msg = new MessageDO();
@@ -204,13 +205,16 @@ class MessageServiceImplTest {
     void persistFileMessageShouldBypassSensitiveFilterAndStoreJsonObject() {
         MessageMapper mapper = mock(MessageMapper.class);
         SensitiveWordService sensitiveWordService = mock(SensitiveWordService.class);
-        MessageServiceImpl service = new MessageServiceImpl(mapper, null, null, sensitiveWordService);
+        FileService fileService = mock(FileService.class);
+        MessageServiceImpl service = new MessageServiceImpl(mapper, null, null, sensitiveWordService, fileService);
 
         MessageDO msg = new MessageDO();
         msg.setFromUserId(1L);
         msg.setToUserId(2L);
         msg.setMsgType("FILE");
-        msg.setContent("{\"fileId\":\"f1\",\"fileName\":\"a.txt\",\"size\":12,\"contentType\":\"text/plain\",\"url\":\"/files/f1/a.txt\"}");
+        msg.setContent("{\"uploadToken\":\"up-1\"}");
+        when(fileService.consumeUploadTokenAndBuildFileMessageContent("{\"uploadToken\":\"up-1\"}", 1L))
+                .thenReturn("{\"fileId\":\"f1\",\"fileName\":\"a.txt\",\"size\":12,\"contentType\":\"text/plain\",\"url\":\"/files/f1\"}");
 
         service.persistMessage(msg);
 

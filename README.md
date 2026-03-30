@@ -52,8 +52,8 @@ im/
 - `GROUP_CHAT` 采用预聚合在线 channel、分批异步推送与失败统计，降低大群推送对 I/O 线程的冲击。
 - Outbox 稳定性
 - backlog 口径包含 `NEW/FAILED/PROCESSING`，支持 `PROCESSING` 超时回收。
-- 文件消息（MVP）
-- 支持 `POST /api/file/upload` 本地上传，`CHAT / GROUP_CHAT` 支持 `FILE` 消息引用，离线补拉返回结构化文件内容。
+- 文件消息（服务端信任模型）
+- 支持 `POST /api/file/upload` 本地上传返回 `uploadToken`，`CHAT / GROUP_CHAT` 在 `FILE` 消息中仅传 `uploadToken`，服务端回填结构化文件内容。
 
 ## 3. 单聊流程闭环（当前实现）
 
@@ -99,11 +99,7 @@ im/
   "targetUserId": 2,
   "msgType": "FILE",
   "content": {
-    "fileId": "f_123456",
-    "fileName": "design.pdf",
-    "size": 34567,
-    "contentType": "application/pdf",
-    "url": "/files/f_123456/design.pdf"
+    "uploadToken": "<UPLOAD_TOKEN>"
   },
   "clientMsgId": "c-file-10001"
 }
@@ -346,7 +342,7 @@ CREATE DATABASE IF NOT EXISTS im_chat DEFAULT CHARACTER SET utf8mb4;
 - `spring.datasource.url/username/password`
 - `im.auth.jwt.secret`（必须替换）
 - `im.netty.port`（默认 `8080`）
-- `im.netty.max-content-length`（默认 `10485760`，需覆盖文件上传请求体）
+- `im.netty.max-content-length`（默认与 `im.file.max-file-size-bytes` 一致，默认 `10485760`）
 - `im.netty.single-chat-require-active-contact`（默认 `false`，开启后要求双方 ACTIVE 联系关系）
 - `im.netty.group-push-batch-size`（默认 `200`，群推送单批 channel 数）
 - `im.netty.group-push-parallelism`（默认 `4`，群推送调度线程并行度）
@@ -359,6 +355,8 @@ CREATE DATABASE IF NOT EXISTS im_chat DEFAULT CHARACTER SET utf8mb4;
 - `im.file.local-base-dir`（默认 `data/uploads`，本地文件存储目录）
 - `im.file.public-url-prefix`（默认 `/files`，本地文件公开访问前缀）
 - `im.file.max-file-size-bytes`（默认 `10485760`，单文件大小限制）
+- `im.file.upload-token-expire-seconds`（默认 `900`，上传凭证有效期）
+- `im.file.allow-owner-download-without-message`（默认 `true`，文件 owner 可直接下载）
 - `im.file.allowed-content-types`（允许上传的 MIME 类型）
 - `im.file.allowed-extensions`（允许上传的扩展名）
 
@@ -449,19 +447,30 @@ mvn -pl im-chat-server test
 
 ## 9. 文件消息示例
 
+- `uploadToken` 由上传接口签发、短期有效、仅可消费一次（`UPLOADED -> BOUND`）。
+- `msgType=FILE` 时 `content` 仅允许 `{"uploadToken":"..."}`，带其它字段会被拒绝。
+- 重复消费同一个 token 返回业务错误 `TOKEN_ALREADY_BOUND`。
+
 上传响应：
 ```json
 {
   "code": 0,
   "msg": "ok",
   "data": {
+    "uploadToken": "<UPLOAD_TOKEN>",
     "fileId": "f_123456",
     "fileName": "design.pdf",
     "contentType": "application/pdf",
     "size": 34567,
-    "url": "/files/f_123456/design.pdf"
+    "url": "/files/f_123456"
   }
 }
+```
+
+下载文件（必须携带 token；单聊需 `from/to` 任一方，群聊需 ACTIVE 成员；默认 owner 也可下载）：
+```bash
+curl -H 'Authorization: Bearer <TOKEN>' \
+  'http://127.0.0.1:8080/files/f_123456' -o design.pdf
 ```
 
 单聊文件消息：
@@ -471,11 +480,7 @@ mvn -pl im-chat-server test
   "targetUserId": 2,
   "msgType": "FILE",
   "content": {
-    "fileId": "f_123456",
-    "fileName": "design.pdf",
-    "size": 34567,
-    "contentType": "application/pdf",
-    "url": "/files/f_123456/design.pdf"
+    "uploadToken": "<UPLOAD_TOKEN>"
   },
   "clientMsgId": "c-file-10001"
 }
@@ -488,11 +493,7 @@ mvn -pl im-chat-server test
   "groupId": 101,
   "msgType": "FILE",
   "content": {
-    "fileId": "f_123456",
-    "fileName": "design.pdf",
-    "size": 34567,
-    "contentType": "application/pdf",
-    "url": "/files/f_123456/design.pdf"
+    "uploadToken": "<UPLOAD_TOKEN>"
   },
   "clientMsgId": "g-file-20001"
 }

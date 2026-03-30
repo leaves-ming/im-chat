@@ -2,11 +2,11 @@ package com.ming.imchatserver.netty;
 
 import com.ming.imchatserver.config.FileStorageProperties;
 import com.ming.imchatserver.config.NettyProperties;
-import com.ming.imchatserver.file.FileStorageService;
 import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.service.AuthService;
 import com.ming.imchatserver.service.ContactService;
+import com.ming.imchatserver.service.FileService;
 import com.ming.imchatserver.service.GroupMessageService;
 import com.ming.imchatserver.service.GroupService;
 import io.netty.channel.ChannelInitializer;
@@ -33,7 +33,7 @@ import java.util.concurrent.Executor;
     private final GroupMessageService groupMessageService;
     private final DeliveryMapper deliveryMapper;
     private final MetricsService metricsService;
-    private final FileStorageService fileStorageService;
+    private final FileService fileService;
     private final FileStorageProperties fileStorageProperties;
     private final Executor groupPushExecutor;
     private final GroupPushCoordinator groupPushCoordinator;
@@ -50,7 +50,7 @@ import java.util.concurrent.Executor;
                                   GroupMessageService groupMessageService,
                                   DeliveryMapper deliveryMapper,
                                   MetricsService metricsService,
-                                  FileStorageService fileStorageService,
+                                  FileService fileService,
                                   FileStorageProperties fileStorageProperties,
                                   Executor groupPushExecutor,
                                   GroupPushCoordinator groupPushCoordinator) {
@@ -63,7 +63,7 @@ import java.util.concurrent.Executor;
         this.groupMessageService = groupMessageService;
         this.deliveryMapper = deliveryMapper;
         this.metricsService = metricsService;
-        this.fileStorageService = fileStorageService;
+        this.fileService = fileService;
         this.fileStorageProperties = fileStorageProperties;
         this.groupPushExecutor = groupPushExecutor;
         this.groupPushCoordinator = groupPushCoordinator;
@@ -86,7 +86,7 @@ import java.util.concurrent.Executor;
         ch.pipeline().addLast(new ChunkedWriteHandler());
 
         // 先处理 REST 请求（如 /api/auth/login），非 REST 请求交由后续处理
-        ch.pipeline().addLast(new HttpRequestHandler(properties, authService, metricsService, fileStorageService, fileStorageProperties));
+        ch.pipeline().addLast(new HttpRequestHandler(properties, authService, metricsService, fileService, fileStorageProperties));
 
         // 握手认证必须在 WebSocketServerProtocolHandler 之前完成
         ch.pipeline().addLast(new WebSocketHandshakeAuthHandler(properties, authService, channelUserManager));

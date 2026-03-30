@@ -12,6 +12,7 @@ import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.netty.GroupPushCoordinator;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
 import com.ming.imchatserver.service.ContactService;
+import com.ming.imchatserver.service.FileTokenBizException;
 import com.ming.imchatserver.service.GroupMessageService;
 import com.ming.imchatserver.service.GroupService;
 import com.ming.imchatserver.service.MessageService;
@@ -342,7 +343,7 @@ class WebSocketFrameHandlerIntegrationTest {
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("""
-                {"type":"CHAT","targetUserId":2,"msgType":"FILE","content":{"fileId":"f1","fileName":"a.txt","size":12,"contentType":"text/plain","url":"/files/f1/a.txt"}}
+                {"type":"CHAT","targetUserId":2,"msgType":"FILE","content":{"uploadToken":"up-1"}}
                 """));
         JsonNode resp = readOutboundJson(channel).get(0);
 
@@ -350,7 +351,41 @@ class WebSocketFrameHandlerIntegrationTest {
         ArgumentCaptor<MessageDO> captor = ArgumentCaptor.forClass(MessageDO.class);
         verify(messageService).persistMessage(captor.capture());
         assertEquals(MessageContentCodec.MSG_TYPE_FILE, captor.getValue().getMsgType());
-        assertTrue(captor.getValue().getContent().contains("\"fileId\":\"f1\""));
+        assertTrue(captor.getValue().getContent().contains("\"uploadToken\":\"up-1\""));
+    }
+
+    @Test
+    void chatShouldRejectFileMessageWithExtraFields() throws Exception {
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(
+                channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService));
+        channel.attr(NettyAttr.USER_ID).set(1L);
+
+        channel.writeInbound(new TextWebSocketFrame("""
+                {"type":"CHAT","targetUserId":2,"msgType":"FILE","content":{"uploadToken":"up-1","fileName":"a.txt"}}
+                """));
+        JsonNode error = readOutboundJson(channel).get(0);
+
+        assertEquals("ERROR", error.get("type").asText());
+        assertEquals("INVALID_PARAM", error.get("code").asText());
+        verify(messageService, never()).persistMessage(any(MessageDO.class));
+    }
+
+    @Test
+    void chatShouldReturnTokenAlreadyBoundWhenUploadTokenReused() throws Exception {
+        when(messageService.persistMessage(any(MessageDO.class)))
+                .thenThrow(new FileTokenBizException("TOKEN_ALREADY_BOUND", "uploadToken already bound"));
+
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(
+                channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService));
+        channel.attr(NettyAttr.USER_ID).set(1L);
+
+        channel.writeInbound(new TextWebSocketFrame("""
+                {"type":"CHAT","targetUserId":2,"msgType":"FILE","content":{"uploadToken":"up-1"}}
+                """));
+        JsonNode error = readOutboundJson(channel).get(0);
+
+        assertEquals("ERROR", error.get("type").asText());
+        assertEquals("TOKEN_ALREADY_BOUND", error.get("code").asText());
     }
 
     @Test
@@ -574,7 +609,7 @@ class WebSocketFrameHandlerIntegrationTest {
         senderChannel.attr(NettyAttr.USER_ID).set(1L);
 
         senderChannel.writeInbound(new TextWebSocketFrame("""
-                {"type":"GROUP_CHAT","groupId":101,"clientMsgId":"c-file","msgType":"FILE","content":{"fileId":"f1","fileName":"a.txt","size":12,"contentType":"text/plain","url":"/files/f1/a.txt"}}
+                {"type":"GROUP_CHAT","groupId":101,"clientMsgId":"c-file","msgType":"FILE","content":{"uploadToken":"up-1"}}
                 """));
 
         JsonNode pushed = readOutboundJson(user2Channel).get(0);

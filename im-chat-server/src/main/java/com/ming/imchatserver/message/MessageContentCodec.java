@@ -30,20 +30,12 @@ public final class MessageContentCodec {
             if (contentNode == null || !contentNode.isObject()) {
                 throw new IllegalArgumentException("content must be object when msgType=FILE");
             }
-            String fileId = requiredText(contentNode, "fileId");
-            String fileName = requiredText(contentNode, "fileName");
-            String contentType = requiredText(contentNode, "contentType");
-            String url = requiredText(contentNode, "url");
-            long size = contentNode.path("size").asLong(-1L);
-            if (size < 0L) {
-                throw new IllegalArgumentException("size must be greater than or equal to 0");
+            String uploadToken = requiredText(contentNode, "uploadToken");
+            if (contentNode.size() != 1) {
+                throw new IllegalArgumentException("content only supports uploadToken when msgType=FILE");
             }
             ObjectNode canonical = MAPPER.createObjectNode();
-            canonical.put("fileId", fileId);
-            canonical.put("fileName", fileName);
-            canonical.put("size", size);
-            canonical.put("contentType", contentType);
-            canonical.put("url", url);
+            canonical.put("uploadToken", uploadToken);
             try {
                 return MAPPER.writeValueAsString(canonical);
             } catch (Exception ex) {
@@ -107,5 +99,25 @@ public final class MessageContentCodec {
             throw new IllegalArgumentException(fieldName + " must not be blank");
         }
         return value;
+    }
+
+    public static String extractIncomingUploadToken(String rawContent) {
+        if (rawContent == null || rawContent.isBlank()) {
+            throw new IllegalArgumentException("content must not be blank");
+        }
+        try {
+            JsonNode node = MAPPER.readTree(rawContent);
+            if (node == null || !node.isObject()) {
+                throw new IllegalArgumentException("content must be object when msgType=FILE");
+            }
+            if (node.size() != 1) {
+                throw new IllegalArgumentException("content only supports uploadToken when msgType=FILE");
+            }
+            return requiredText(node, "uploadToken");
+        } catch (IllegalArgumentException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("invalid file content");
+        }
     }
 }

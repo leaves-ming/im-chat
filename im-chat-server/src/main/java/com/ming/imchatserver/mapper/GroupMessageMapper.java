@@ -49,4 +49,17 @@ public interface GroupMessageMapper {
     List<GroupMessageDO> findAfterSeq(@Param("groupId") Long groupId,
                                       @Param("cursorSeq") Long cursorSeq,
                                       @Param("limit") int limit);
+
+    @Select("""
+            SELECT 1
+            FROM im_group_message gm
+            JOIN im_group_member gmem ON gmem.group_id = gm.group_id
+            WHERE gm.msg_type = 'FILE'
+              AND JSON_UNQUOTE(JSON_EXTRACT(gm.content, '$.fileId')) = #{fileId}
+              AND gmem.user_id = #{userId}
+              AND gmem.member_status = 1
+            LIMIT 1
+            """)
+    Integer existsFileForActiveMember(@Param("fileId") String fileId,
+                                      @Param("userId") Long userId);
 }

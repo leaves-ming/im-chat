@@ -1,11 +1,13 @@
 package com.ming.imchatserver.file;
 
+import java.io.InputStream;
+
 /**
  * 文件存储抽象。
  */
 public interface FileStorageService {
 
-    FileMetadata store(String fileName, String contentType, byte[] bytes);
+    void store(String storageKey, InputStream inputStream);
 
-    StoredFileResource load(String fileId, String fileName);
+    StoredFileResource load(String storageKey, String fileName, String contentType);
 }
