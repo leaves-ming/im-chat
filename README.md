@@ -356,6 +356,9 @@ CREATE DATABASE IF NOT EXISTS im_chat DEFAULT CHARACTER SET utf8mb4;
 - `im.file.public-url-prefix`（默认 `/files`，本地文件公开访问前缀）
 - `im.file.max-file-size-bytes`（默认 `10485760`，单文件大小限制）
 - `im.file.upload-token-expire-seconds`（默认 `900`，上传凭证有效期）
+- `im.file.download-sign-secret`（必填，本地文件私有下载签名密钥）
+- `im.file.download-sign-expire-seconds`（默认 `300`，下载签名有效期）
+- `im.file.download-sign-one-time`（默认 `false`，开启后签名仅可成功消费一次，依赖 Redis）
 - `im.file.allow-owner-download-without-message`（默认 `true`，文件 owner 可直接下载）
 - `im.file.allowed-content-types`（允许上传的 MIME 类型）
 - `im.file.allowed-extensions`（允许上传的扩展名）
@@ -450,6 +453,7 @@ mvn -pl im-chat-server test
 - `uploadToken` 由上传接口签发、短期有效、仅可消费一次（`UPLOADED -> BOUND`）。
 - `msgType=FILE` 时 `content` 仅允许 `{"uploadToken":"..."}`，带其它字段会被拒绝。
 - 重复消费同一个 token 返回业务错误 `TOKEN_ALREADY_BOUND`。
+- FILE 内容中的 `url` 字段保留用于兼容展示，不再作为客户端直接下载入口。
 
 上传响应：
 ```json
@@ -467,10 +471,17 @@ mvn -pl im-chat-server test
 }
 ```
 
-下载文件（必须携带 token；单聊需 `from/to` 任一方，群聊需 ACTIVE 成员；默认 owner 也可下载）：
+申请私有下载链接（必须携带 token；服务端先做权限校验）：
 ```bash
-curl -H 'Authorization: Bearer <TOKEN>' \
-  'http://127.0.0.1:8080/files/f_123456' -o design.pdf
+curl -X POST 'http://127.0.0.1:8080/api/file/download-url' \
+  -H 'Authorization: Bearer <TOKEN>' \
+  -H 'Content-Type: application/json' \
+  -d '{"fileId":"f_123456"}'
+```
+
+下载文件（使用上一步返回的签名链接；本地文件仍为流式下载）：
+```bash
+curl 'http://127.0.0.1:8080/files/download?fileId=f_123456&exp=1711111111&sig=xxxx' -o design.pdf
 ```
 
 单聊文件消息：

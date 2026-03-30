@@ -19,9 +19,15 @@ import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.service.FileService;
 import com.ming.imchatserver.service.FileTokenBizException;
 import org.springframework.stereotype.Service;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.transaction.annotation.Transactional;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -48,6 +54,7 @@ public class FileServiceImpl implements FileService {
     private final GroupMessageMapper groupMessageMapper;
     private final FileStorageService fileStorageService;
     private final FileStorageProperties fileStorageProperties;
+    private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final SecureRandom secureRandom = new SecureRandom();
 
@@ -56,13 +63,15 @@ public class FileServiceImpl implements FileService {
                            MessageMapper messageMapper,
                            GroupMessageMapper groupMessageMapper,
                            FileStorageService fileStorageService,
-                           FileStorageProperties fileStorageProperties) {
+                           FileStorageProperties fileStorageProperties,
+                           StringRedisTemplate stringRedisTemplate) {
         this.fileRecordMapper = fileRecordMapper;
         this.uploadTokenMapper = uploadTokenMapper;
         this.messageMapper = messageMapper;
         this.groupMessageMapper = groupMessageMapper;
         this.fileStorageService = fileStorageService;
         this.fileStorageProperties = fileStorageProperties;
+        this.stringRedisTemplate = stringRedisTemplate;
     }
 
     @Override
@@ -161,6 +170,40 @@ public class FileServiceImpl implements FileService {
     }
 
     @Override
+    public DownloadUrlResult createDownloadUrl(Long requesterUserId, String fileId) {
+        if (requesterUserId == null || requesterUserId <= 0L) {
+            throw new FileAccessDeniedException("requester not authenticated");
+        }
+        FileRecordDO record = fileRecordMapper.findByFileId(fileId);
+        if (record == null) {
+            throw new FileNotFoundBizException("file not found");
+        }
+        if (!hasDownloadPermission(requesterUserId, record)) {
+            throw new FileAccessDeniedException("file access forbidden");
+        }
+        long expireAt = currentEpochSecond() + fileStorageProperties.getDownloadSignExpireSeconds();
+        String signature = sign(fileId, expireAt);
+        String downloadUrl = buildDownloadUrl(fileId, expireAt, signature);
+        return new DownloadUrlResult(downloadUrl, expireAt);
+    }
+
+    @Override
+    public StoredFileResource loadBySignedDownloadUrl(String fileId, long expireAt, String signature) {
+        validateSignedDownloadRequest(fileId, expireAt, signature);
+
+        FileRecordDO record = fileRecordMapper.findByFileId(fileId);
+        if (record == null) {
+            throw new FileNotFoundBizException("file not found");
+        }
+        StoredFileResource resource = fileStorageService.load(record.getStorageKey(), record.getOriginalFileName(), normalizeContentType(record.getContentType()));
+        if (resource == null) {
+            throw new FileNotFoundBizException("file not found");
+        }
+        consumeSignedDownloadOnceIfNeeded(signature, expireAt);
+        return resource;
+    }
+
+    @Override
     public FileRecordDO findByFileId(String fileId) {
         if (fileId == null || fileId.isBlank()) {
             return null;
@@ -206,6 +249,10 @@ public class FileServiceImpl implements FileService {
         return prefix + "/" + fileId;
     }
 
+    private String buildDownloadUrl(String fileId, long expireAt, String signature) {
+        return normalizedFilePrefix() + "/download?fileId=" + fileId + "&exp=" + expireAt + "&sig=" + signature;
+    }
+
     private void validateTokenPrecondition(UploadTokenDO token, Long senderUserId) {
         if (token == null) {
             throw new FileTokenBizException("INVALID_PARAM", "uploadToken not found");
@@ -249,5 +296,82 @@ public class FileServiceImpl implements FileService {
 
     private Date toDate(LocalDateTime localDateTime) {
         return java.sql.Timestamp.valueOf(localDateTime);
+    }
+
+    private void validateSignedDownloadRequest(String fileId, long expireAt, String signature) {
+        if (fileId == null || fileId.isBlank() || expireAt <= 0L || signature == null || signature.isBlank()) {
+            throw new FileAccessDeniedException("invalid download signature");
+        }
+        long now = currentEpochSecond();
+        if (expireAt <= now) {
+            throw new FileAccessDeniedException("download signature expired");
+        }
+        String expectedSignature = sign(fileId, expireAt);
+        if (!constantTimeEquals(expectedSignature, signature)) {
+            throw new FileAccessDeniedException("invalid download signature");
+        }
+    }
+
+    private void consumeSignedDownloadOnceIfNeeded(String signature, long expireAt) {
+        if (!fileStorageProperties.isDownloadSignOneTime()) {
+            return;
+        }
+        if (stringRedisTemplate == null) {
+            throw new IllegalStateException("redis unavailable for one-time download signature");
+        }
+        long ttlSeconds = Math.max(1L, expireAt - currentEpochSecond());
+        String key = "im:file:download:sig:" + sha256Base64Url(signature);
+        ValueOperations<String, String> ops = stringRedisTemplate.opsForValue();
+        Boolean created = ops.setIfAbsent(key, "1", java.time.Duration.ofSeconds(ttlSeconds));
+        if (!Boolean.TRUE.equals(created)) {
+            throw new FileAccessDeniedException("download signature already consumed");
+        }
+    }
+
+    private String sign(String fileId, long expireAt) {
+        String secret = fileStorageProperties.getDownloadSignSecret();
+        if (secret == null || secret.isBlank()) {
+            throw new IllegalStateException("im.file.download-sign-secret must not be blank");
+        }
+        String payload = fileId + "\n" + expireAt;
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            byte[] digest = mac.doFinal(payload.getBytes(StandardCharsets.UTF_8));
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(digest);
+        } catch (Exception ex) {
+            throw new IllegalStateException("sign download url failed", ex);
+        }
+    }
+
+    private boolean constantTimeEquals(String left, String right) {
+        return MessageDigest.isEqual(left.getBytes(StandardCharsets.UTF_8), right.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private String sha256Base64Url(String text) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8));
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(digest);
+        } catch (Exception ex) {
+            throw new IllegalStateException("hash signature failed", ex);
+        }
+    }
+
+    private long currentEpochSecond() {
+        return System.currentTimeMillis() / 1000L;
+    }
+
+    private String normalizedFilePrefix() {
+        String prefix = fileStorageProperties.getPublicUrlPrefix();
+        if (prefix == null || prefix.isBlank()) {
+            prefix = "/files";
+        }
+        if (!prefix.startsWith("/")) {
+            prefix = "/" + prefix;
+        }
+        if (prefix.endsWith("/")) {
+            prefix = prefix.substring(0, prefix.length() - 1);
+        }
+        return prefix;
     }
 }

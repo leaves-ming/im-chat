@@ -1,5 +1,6 @@
 package com.ming.imchatserver.netty;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ming.imchatserver.config.FileStorageProperties;
@@ -87,8 +88,8 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest req) throws Exception {
         String uri = req.uri();
-        if (HttpMethod.GET.equals(req.method()) && isFileRequest(uri)) {
-            handleFileDownload(ctx, req);
+        if (HttpMethod.GET.equals(req.method()) && isSignedFileDownloadRequest(uri)) {
+            handleSignedFileDownload(ctx, req);
             return;
         }
         if (HttpMethod.GET.equals(req.method()) && uri.startsWith("/internal/metrics")) {
@@ -105,6 +106,10 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
         }
         if (HttpMethod.POST.equals(req.method()) && uri.startsWith("/api/file/upload")) {
             handleFileUpload(ctx, req);
+            return;
+        }
+        if (HttpMethod.POST.equals(req.method()) && uri.startsWith("/api/file/download-url")) {
+            handleFileDownloadUrl(ctx, req);
             return;
         }
         if (HttpMethod.POST.equals(req.method()) && uri.startsWith("/api/auth/login")) {
@@ -217,27 +222,60 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
         }
     }
 
-    private void handleFileDownload(ChannelHandlerContext ctx, FullHttpRequest req) throws Exception {
+    private void handleFileDownloadUrl(ChannelHandlerContext ctx, FullHttpRequest req) throws Exception {
         if (fileService == null || fileStorageProperties == null) {
-            writePlain(ctx, HttpResponseStatus.SERVICE_UNAVAILABLE, "file storage unavailable", "text/plain; charset=UTF-8");
+            writeJson(ctx, "{\"code\":1,\"msg\":\"file storage unavailable\"}", HttpResponseStatus.SERVICE_UNAVAILABLE);
             return;
         }
         Optional<AuthService.AuthUser> authUser = authenticate(req);
         if (authUser.isEmpty()) {
-            writePlain(ctx, HttpResponseStatus.UNAUTHORIZED, "unauthorized", "text/plain; charset=UTF-8");
+            writeJson(ctx, "{\"code\":401,\"msg\":\"unauthorized\"}", HttpResponseStatus.UNAUTHORIZED);
             return;
         }
+        try {
+            JsonNode body = mapper.readTree(req.content().toString(StandardCharsets.UTF_8));
+            String fileId = body == null ? null : body.path("fileId").asText(null);
+            if (fileId == null || fileId.isBlank()) {
+                writeJson(ctx, "{\"code\":400,\"msg\":\"fileId required\"}", HttpResponseStatus.BAD_REQUEST);
+                return;
+            }
+            FileService.DownloadUrlResult result = fileService.createDownloadUrl(authUser.get().userId, fileId);
+            ObjectNode data = mapper.createObjectNode();
+            data.put("downloadUrl", result.downloadUrl());
+            data.put("expireAt", result.expireAt());
+            ObjectNode resp = mapper.createObjectNode();
+            resp.put("code", 0);
+            resp.put("msg", "ok");
+            resp.set("data", data);
+            writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.OK);
+        } catch (FileAccessDeniedException ex) {
+            writeJson(ctx, "{\"code\":403,\"msg\":\"forbidden\"}", HttpResponseStatus.FORBIDDEN);
+        } catch (FileNotFoundBizException ex) {
+            writeJson(ctx, "{\"code\":404,\"msg\":\"not found\"}", HttpResponseStatus.NOT_FOUND);
+        } catch (Exception ex) {
+            logger.warn("invalid download-url request", ex);
+            writeJson(ctx, "{\"code\":400,\"msg\":\"bad request\"}", HttpResponseStatus.BAD_REQUEST);
+        }
+    }
 
-        String fileId = parseFileId(req.uri());
-        if (fileId == null || fileId.isBlank()) {
-            writePlain(ctx, HttpResponseStatus.NOT_FOUND, "not found", "text/plain; charset=UTF-8");
+    private void handleSignedFileDownload(ChannelHandlerContext ctx, FullHttpRequest req) throws Exception {
+        if (fileService == null || fileStorageProperties == null) {
+            writePlain(ctx, HttpResponseStatus.SERVICE_UNAVAILABLE, "file storage unavailable", "text/plain; charset=UTF-8");
             return;
         }
+        QueryStringDecoder decoder = new QueryStringDecoder(req.uri());
+        String fileId = firstQueryParam(decoder, "fileId");
+        String expRaw = firstQueryParam(decoder, "exp");
+        String signature = firstQueryParam(decoder, "sig");
 
         final StoredFileResource resource;
         try {
-            resource = fileService.loadAuthorizedFile(authUser.get().userId, fileId);
+            long expireAt = expRaw == null ? -1L : Long.parseLong(expRaw);
+            resource = fileService.loadBySignedDownloadUrl(fileId, expireAt, signature);
         } catch (FileAccessDeniedException ex) {
+            writePlain(ctx, HttpResponseStatus.FORBIDDEN, "forbidden", "text/plain; charset=UTF-8");
+            return;
+        } catch (NumberFormatException ex) {
             writePlain(ctx, HttpResponseStatus.FORBIDDEN, "forbidden", "text/plain; charset=UTF-8");
             return;
         } catch (FileNotFoundBizException ex) {
@@ -279,26 +317,9 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
         return authService.parseToken(token);
     }
 
-    private boolean isFileRequest(String uri) {
+    private boolean isSignedFileDownloadRequest(String uri) {
         String prefix = normalizedFilePrefix();
-        return prefix != null && new QueryStringDecoder(uri).path().startsWith(prefix + "/");
-    }
-
-    private String parseFileId(String uri) {
-        String prefix = normalizedFilePrefix();
-        if (prefix == null) {
-            return null;
-        }
-        String path = new QueryStringDecoder(uri).path();
-        if (!path.startsWith(prefix + "/")) {
-            return null;
-        }
-        String suffix = path.substring(prefix.length() + 1);
-        if (suffix.isBlank()) {
-            return null;
-        }
-        String[] segments = suffix.split("/");
-        return segments.length == 0 ? null : segments[0];
+        return prefix != null && (prefix + "/download").equals(new QueryStringDecoder(uri).path());
     }
 
     private String normalizedFilePrefix() {
@@ -341,5 +362,13 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
         resp.headers().set(CONTENT_TYPE, contentType);
         resp.headers().set(HttpHeaderNames.CONTENT_LENGTH, resp.content().readableBytes());
         ctx.writeAndFlush(resp).addListener(ChannelFutureListener.CLOSE);
+    }
+
+    private String firstQueryParam(QueryStringDecoder decoder, String key) {
+        List<String> values = decoder.parameters().get(key);
+        if (values == null || values.isEmpty()) {
+            return null;
+        }
+        return values.get(0);
     }
 }

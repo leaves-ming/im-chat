@@ -96,6 +96,9 @@ im:
     public-url-prefix: /files
     max-file-size-bytes: 10485760
     upload-token-expire-seconds: 900
+    download-sign-secret: PLEASE_REPLACE_FILE_DOWNLOAD_SECRET
+    download-sign-expire-seconds: 300
+    download-sign-one-time: false
     allow-owner-download-without-message: true
   metrics:
     sample-fixed-delay-ms: 10000

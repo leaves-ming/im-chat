@@ -6,6 +6,8 @@ import com.ming.imchatserver.config.FileStorageProperties;
 import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.file.FileAccessDeniedException;
 import com.ming.imchatserver.file.FileMetadata;
+import com.ming.imchatserver.file.FileNotFoundBizException;
+import com.ming.imchatserver.file.StoredFileResource;
 import com.ming.imchatserver.service.AuthService;
 import com.ming.imchatserver.service.FileService;
 import io.netty.buffer.Unpooled;
@@ -20,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Optional;
 
@@ -116,7 +119,7 @@ class HttpRequestHandlerTest {
     }
 
     @Test
-    void downloadShouldRejectWhenMissingToken() {
+    void downloadUrlShouldRejectWhenMissingToken() {
         NettyProperties nettyProperties = new NettyProperties();
         AuthService authService = mock(AuthService.class);
         FileStorageProperties fileStorageProperties = new FileStorageProperties();
@@ -125,9 +128,11 @@ class HttpRequestHandlerTest {
         EmbeddedChannel channel = new EmbeddedChannel(new HttpRequestHandler(nettyProperties, authService, null, fileService, fileStorageProperties));
         DefaultFullHttpRequest request = new DefaultFullHttpRequest(
                 HttpVersion.HTTP_1_1,
-                HttpMethod.GET,
-                "/files/f_1"
+                HttpMethod.POST,
+                "/api/file/download-url",
+                Unpooled.copiedBuffer("{\"fileId\":\"f_1\"}", StandardCharsets.UTF_8)
         );
+        request.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json; charset=UTF-8");
 
         channel.writeInbound(request);
         FullHttpResponse response = channel.readOutbound();
@@ -135,7 +140,7 @@ class HttpRequestHandlerTest {
     }
 
     @Test
-    void downloadShouldReturnForbiddenWhenUnauthorizedAccess() {
+    void downloadUrlShouldReturnForbiddenWhenUnauthorizedAccess() throws Exception {
         NettyProperties nettyProperties = new NettyProperties();
         AuthService authService = mock(AuthService.class);
         FileStorageProperties fileStorageProperties = new FileStorageProperties();
@@ -145,18 +150,119 @@ class HttpRequestHandlerTest {
         authUser.userId = 1L;
         when(authService.verifyToken("token-1")).thenReturn(true);
         when(authService.parseToken("token-1")).thenReturn(Optional.of(authUser));
-        when(fileService.loadAuthorizedFile(1L, "f_1")).thenThrow(new FileAccessDeniedException("forbidden"));
+        when(fileService.createDownloadUrl(1L, "f_1")).thenThrow(new FileAccessDeniedException("forbidden"));
+
+        EmbeddedChannel channel = new EmbeddedChannel(new HttpRequestHandler(nettyProperties, authService, null, fileService, fileStorageProperties));
+        DefaultFullHttpRequest request = new DefaultFullHttpRequest(
+                HttpVersion.HTTP_1_1,
+                HttpMethod.POST,
+                "/api/file/download-url",
+                Unpooled.copiedBuffer("{\"fileId\":\"f_1\"}", StandardCharsets.UTF_8)
+        );
+        request.headers().set(HttpHeaderNames.AUTHORIZATION, "Bearer token-1");
+        request.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json; charset=UTF-8");
+
+        channel.writeInbound(request);
+        FullHttpResponse response = channel.readOutbound();
+        assertEquals(HttpResponseStatus.FORBIDDEN, response.status());
+    }
+
+    @Test
+    void downloadUrlShouldReturnSignedLinkWhenAuthorized() throws Exception {
+        NettyProperties nettyProperties = new NettyProperties();
+        AuthService authService = mock(AuthService.class);
+        FileStorageProperties fileStorageProperties = new FileStorageProperties();
+        fileStorageProperties.setDownloadSignSecret("secret-1");
+        FileService fileService = mock(FileService.class);
+
+        AuthService.AuthUser authUser = new AuthService.AuthUser();
+        authUser.userId = 1L;
+        when(authService.verifyToken("token-1")).thenReturn(true);
+        when(authService.parseToken("token-1")).thenReturn(Optional.of(authUser));
+        when(fileService.createDownloadUrl(1L, "f_1"))
+                .thenReturn(new FileService.DownloadUrlResult("/files/download?fileId=f_1&exp=123&sig=abc", 123L));
+
+        EmbeddedChannel channel = new EmbeddedChannel(new HttpRequestHandler(nettyProperties, authService, null, fileService, fileStorageProperties));
+        DefaultFullHttpRequest request = new DefaultFullHttpRequest(
+                HttpVersion.HTTP_1_1,
+                HttpMethod.POST,
+                "/api/file/download-url",
+                Unpooled.copiedBuffer("{\"fileId\":\"f_1\"}", StandardCharsets.UTF_8)
+        );
+        request.headers().set(HttpHeaderNames.AUTHORIZATION, "Bearer token-1");
+        request.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json; charset=UTF-8");
+
+        channel.writeInbound(request);
+        FullHttpResponse response = channel.readOutbound();
+        JsonNode json = mapper.readTree(response.content().toString(StandardCharsets.UTF_8));
+
+        assertEquals(HttpResponseStatus.OK, response.status());
+        assertEquals("/files/download?fileId=f_1&exp=123&sig=abc", json.get("data").get("downloadUrl").asText());
+        assertEquals(123L, json.get("data").get("expireAt").asLong());
+    }
+
+    @Test
+    void signedDownloadShouldReturnFileStreamWhenSignatureValid() throws Exception {
+        NettyProperties nettyProperties = new NettyProperties();
+        AuthService authService = mock(AuthService.class);
+        FileStorageProperties fileStorageProperties = new FileStorageProperties();
+        FileService fileService = mock(FileService.class);
+        Path file = tempDir.resolve("note.txt");
+        Files.writeString(file, "hello");
+        when(fileService.loadBySignedDownloadUrl("f_1", 123L, "abc"))
+                .thenReturn(new StoredFileResource(file, "note.txt", "text/plain", Files.size(file)));
 
         EmbeddedChannel channel = new EmbeddedChannel(new HttpRequestHandler(nettyProperties, authService, null, fileService, fileStorageProperties));
         DefaultFullHttpRequest request = new DefaultFullHttpRequest(
                 HttpVersion.HTTP_1_1,
                 HttpMethod.GET,
-                "/files/f_1"
+                "/files/download?fileId=f_1&exp=123&sig=abc"
         );
-        request.headers().set(HttpHeaderNames.AUTHORIZATION, "Bearer token-1");
+
+        channel.writeInbound(request);
+        Object response = channel.readOutbound();
+        assertTrue(response instanceof io.netty.handler.codec.http.HttpResponse);
+    }
+
+    @Test
+    void signedDownloadShouldReturnForbiddenWhenSignatureInvalid() {
+        NettyProperties nettyProperties = new NettyProperties();
+        AuthService authService = mock(AuthService.class);
+        FileStorageProperties fileStorageProperties = new FileStorageProperties();
+        FileService fileService = mock(FileService.class);
+        when(fileService.loadBySignedDownloadUrl("f_1", 123L, "bad"))
+                .thenThrow(new FileAccessDeniedException("forbidden"));
+
+        EmbeddedChannel channel = new EmbeddedChannel(new HttpRequestHandler(nettyProperties, authService, null, fileService, fileStorageProperties));
+        DefaultFullHttpRequest request = new DefaultFullHttpRequest(
+                HttpVersion.HTTP_1_1,
+                HttpMethod.GET,
+                "/files/download?fileId=f_1&exp=123&sig=bad"
+        );
 
         channel.writeInbound(request);
         FullHttpResponse response = channel.readOutbound();
         assertEquals(HttpResponseStatus.FORBIDDEN, response.status());
+    }
+
+    @Test
+    void signedDownloadShouldReturnNotFoundWhenFileMissing() {
+        NettyProperties nettyProperties = new NettyProperties();
+        AuthService authService = mock(AuthService.class);
+        FileStorageProperties fileStorageProperties = new FileStorageProperties();
+        FileService fileService = mock(FileService.class);
+        when(fileService.loadBySignedDownloadUrl("f_1", 123L, "abc"))
+                .thenThrow(new FileNotFoundBizException("not found"));
+
+        EmbeddedChannel channel = new EmbeddedChannel(new HttpRequestHandler(nettyProperties, authService, null, fileService, fileStorageProperties));
+        DefaultFullHttpRequest request = new DefaultFullHttpRequest(
+                HttpVersion.HTTP_1_1,
+                HttpMethod.GET,
+                "/files/download?fileId=f_1&exp=123&sig=abc"
+        );
+
+        channel.writeInbound(request);
+        FullHttpResponse response = channel.readOutbound();
+        assertEquals(HttpResponseStatus.NOT_FOUND, response.status());
     }
 }

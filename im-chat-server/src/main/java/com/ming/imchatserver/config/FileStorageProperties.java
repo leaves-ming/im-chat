@@ -24,6 +24,12 @@ public class FileStorageProperties {
     private long maxFileSizeBytes = 10 * 1024 * 1024L;
     /** 上传凭证有效期（秒）。 */
     private long uploadTokenExpireSeconds = 900L;
+    /** 下载签名密钥。 */
+    private String downloadSignSecret = "";
+    /** 下载签名有效期（秒）。 */
+    private long downloadSignExpireSeconds = 300L;
+    /** 下载签名是否仅允许成功消费一次。 */
+    private boolean downloadSignOneTime = false;
     /** 是否允许 owner 不依赖消息关系直接下载。 */
     private boolean allowOwnerDownloadWithoutMessage = true;
     /** 允许的 content type 列表，空表示不限制。 */

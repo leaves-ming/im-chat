@@ -11,6 +11,9 @@ import java.io.InputStream;
  */
 public interface FileService {
 
+    record DownloadUrlResult(String downloadUrl, long expireAt) {
+    }
+
     FileMetadata store(Long ownerUserId,
                        String originalFileName,
                        String contentType,
@@ -20,6 +23,10 @@ public interface FileService {
     String consumeUploadTokenAndBuildFileMessageContent(String rawIncomingContent, Long senderUserId);
 
     StoredFileResource loadAuthorizedFile(Long requesterUserId, String fileId);
+
+    DownloadUrlResult createDownloadUrl(Long requesterUserId, String fileId);
+
+    StoredFileResource loadBySignedDownloadUrl(String fileId, long expireAt, String signature);
 
     FileRecordDO findByFileId(String fileId);
 }
