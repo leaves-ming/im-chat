@@ -8,7 +8,9 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * <p>
  * 负责引导 Spring Boot 容器启动，并触发后续 Netty 组件初始化。
  */
-@SpringBootApplication
+@SpringBootApplication(excludeName = {
+        "org.redisson.spring.starter.RedissonAutoConfigurationV2"
+})
 public class ImChatServerApplication {
 
     /**

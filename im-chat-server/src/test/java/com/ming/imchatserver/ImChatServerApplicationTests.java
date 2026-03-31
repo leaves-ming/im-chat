@@ -12,7 +12,8 @@ import org.springframework.context.annotation.Bean;
  * 本类注释由统一规范补充，描述职责、边界与使用语义。
  */
 @SpringBootTest(properties = {
-        "spring.autoconfigure.exclude=org.apache.rocketmq.spring.autoconfigure.RocketMQAutoConfiguration"
+        "spring.autoconfigure.exclude=org.apache.rocketmq.spring.autoconfigure.RocketMQAutoConfiguration",
+        "im.redisson.enabled=false"
 })
 class ImChatServerApplicationTests {
 
