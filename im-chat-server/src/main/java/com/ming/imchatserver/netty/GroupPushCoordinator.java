@@ -1,6 +1,8 @@
 package com.ming.imchatserver.netty;
 
 import com.ming.imchatserver.service.DistributedCoordinationService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -16,6 +18,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Component
 public class GroupPushCoordinator {
+
+    private static final Logger logger = LoggerFactory.getLogger(GroupPushCoordinator.class);
 
     private final ConcurrentHashMap<Long, CompletableFuture<Void>> groupPushTails = new ConcurrentHashMap<>();
     private final DistributedCoordinationService distributedCoordinationService;
@@ -44,7 +48,10 @@ public class GroupPushCoordinator {
                         Duration.ofMillis(200),
                         Duration.ofSeconds(10),
                         task::run,
-                        task::run);
+                        () -> {
+                            logger.info("group push skipped because distributed lock was not acquired groupId={}", groupId);
+                            return CompletableFuture.completedFuture(null);
+                        });
             });
             next.whenComplete((ignored, ex) -> groupPushTails.compute(key, (innerKey, current) -> current == next ? null : current));
             return next;

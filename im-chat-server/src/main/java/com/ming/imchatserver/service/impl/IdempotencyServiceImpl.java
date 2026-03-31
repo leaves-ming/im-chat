@@ -31,6 +31,14 @@ public class IdempotencyServiceImpl implements IdempotencyService {
     }
 
     @Override
+    public void releaseClientMessage(Long userId, String clientMsgId) {
+        if (userId == null || clientMsgId == null || clientMsgId.isBlank()) {
+            return;
+        }
+        stringRedisTemplate.delete(redisKeyFactory.idempotentClientMsg(userId, clientMsgId));
+    }
+
+    @Override
     public boolean consumeOnce(String scope, String token, Duration ttl) {
         if (scope == null || scope.isBlank() || token == null || token.isBlank() || ttl == null || ttl.isNegative() || ttl.isZero()) {
             return false;
@@ -39,4 +47,3 @@ public class IdempotencyServiceImpl implements IdempotencyService {
                 .setIfAbsent(redisKeyFactory.idempotentOneTime(scope, token), "1", ttl));
     }
 }
-

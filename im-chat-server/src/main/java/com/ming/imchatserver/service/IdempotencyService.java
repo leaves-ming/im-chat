@@ -9,6 +9,7 @@ public interface IdempotencyService {
 
     boolean claimClientMessage(Long userId, String clientMsgId, Duration ttl);
 
+    void releaseClientMessage(Long userId, String clientMsgId);
+
     boolean consumeOnce(String scope, String token, Duration ttl);
 }
-

@@ -75,14 +75,17 @@ public class PresenceServiceImpl implements PresenceService {
         if (userId == null) {
             return List.of();
         }
-        Set<String> sessionIds = stringRedisTemplate.opsForSet().members(redisKeyFactory.presenceUserSessions(userId));
+        String userSessionsKey = redisKeyFactory.presenceUserSessions(userId);
+        Set<String> sessionIds = stringRedisTemplate.opsForSet().members(userSessionsKey);
         if (sessionIds == null || sessionIds.isEmpty()) {
             return List.of();
         }
         List<OnlineEndpoint> endpoints = new ArrayList<>();
+        List<String> staleSessionIds = new ArrayList<>();
         for (String sessionId : sessionIds) {
             Map<Object, Object> session = stringRedisTemplate.opsForHash().entries(redisKeyFactory.presenceSession(sessionId));
             if (session == null || session.isEmpty()) {
+                staleSessionIds.add(sessionId);
                 continue;
             }
             endpoints.add(new OnlineEndpoint(
@@ -90,6 +93,9 @@ public class PresenceServiceImpl implements PresenceService {
                     String.valueOf(session.getOrDefault("deviceId", "")),
                     String.valueOf(session.getOrDefault("sessionId", sessionId)),
                     parseLong(session.get("lastHeartbeatAt"))));
+        }
+        if (!staleSessionIds.isEmpty()) {
+            stringRedisTemplate.opsForSet().remove(userSessionsKey, staleSessionIds.toArray());
         }
         return endpoints;
     }
@@ -110,4 +116,3 @@ public class PresenceServiceImpl implements PresenceService {
         }
     }
 }
-

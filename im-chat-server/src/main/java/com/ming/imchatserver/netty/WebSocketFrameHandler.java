@@ -531,7 +531,13 @@ import java.util.concurrent.RejectedExecutionException;
             sendError(ch, "DUPLICATE_REQUEST", "clientMsgId replay detected");
             return;
         }
-        GroupMessageService.PersistResult persistResult = groupMessageService.persistMessage(groupId, fromUserId, clientMsgId, msgType, content);
+        GroupMessageService.PersistResult persistResult;
+        try {
+            persistResult = groupMessageService.persistMessage(groupId, fromUserId, clientMsgId, msgType, content);
+        } catch (Exception ex) {
+            releaseClientMessageId(fromUserId, clientMsgId);
+            throw ex;
+        }
         GroupMessageDO message = persistResult.getMessage();
 
         dispatchGroupPush(groupId, message);
@@ -634,12 +640,12 @@ import java.util.concurrent.RejectedExecutionException;
             sendError(ch, "RATE_LIMITED", "message send rate exceeded");
             return;
         }
-        if (!claimClientMessageId(fromUserId, normalizedClientMsgId)) {
-            sendError(ch, "DUPLICATE_REQUEST", "clientMsgId replay detected");
-            return;
-        }
         if (nettyProperties.isSingleChatRequireActiveContact() && !isSingleChatAllowedByContact(fromUserId, target)) {
             sendError(ch, "FORBIDDEN", "single chat requires active bilateral contacts");
+            return;
+        }
+        if (!claimClientMessageId(fromUserId, normalizedClientMsgId)) {
+            sendError(ch, "DUPLICATE_REQUEST", "clientMsgId replay detected");
             return;
         }
 
@@ -651,7 +657,13 @@ import java.util.concurrent.RejectedExecutionException;
         msg.setContent(content);
         msg.setStatus("SENT");
 
-        MessageService.PersistResult persistResult = messageService.persistMessage(msg);
+        MessageService.PersistResult persistResult;
+        try {
+            persistResult = messageService.persistMessage(msg);
+        } catch (RuntimeException ex) {
+            releaseClientMessageId(fromUserId, normalizedClientMsgId);
+            throw ex;
+        }
         String serverMsgId = persistResult.getServerMsgId();
         sendServerAck(ch, normalizedClientMsgId, serverMsgId, persistResult.isCreatedNew());
     }
@@ -979,6 +991,13 @@ import java.util.concurrent.RejectedExecutionException;
             return true;
         }
         return idempotencyService.claimClientMessage(userId, clientMsgId, java.time.Duration.ofSeconds(redisStateProperties.getClientMsgIdTtlSeconds()));
+    }
+
+    private void releaseClientMessageId(Long userId, String clientMsgId) {
+        if (idempotencyService == null || clientMsgId == null || clientMsgId.isBlank() || userId == null) {
+            return;
+        }
+        idempotencyService.releaseClientMessage(userId, clientMsgId);
     }
 
     /**

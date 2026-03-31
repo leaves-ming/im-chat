@@ -3,6 +3,7 @@ package com.ming.imchatserver.netty;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ming.imchatserver.config.NettyProperties;
+import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imchatserver.dao.ContactDO;
 import com.ming.imchatserver.dao.GroupMessageDO;
 import com.ming.imchatserver.dao.MessageDO;
@@ -15,6 +16,7 @@ import com.ming.imchatserver.service.ContactService;
 import com.ming.imchatserver.service.FileTokenBizException;
 import com.ming.imchatserver.service.GroupMessageService;
 import com.ming.imchatserver.service.GroupService;
+import com.ming.imchatserver.service.IdempotencyService;
 import com.ming.imchatserver.service.MessageService;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelId;
@@ -39,6 +41,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -285,6 +288,45 @@ class WebSocketFrameHandlerIntegrationTest {
         assertEquals("ERROR", error.get("type").asText());
         assertEquals("FORBIDDEN", error.get("code").asText());
         verify(messageService, never()).persistMessage(any(MessageDO.class));
+    }
+
+    @Test
+    void chatShouldClaimAfterContactValidationAndReleaseOnPersistFailure() throws Exception {
+        nettyProperties.setSingleChatRequireActiveContact(true);
+        when(contactService.isActiveContact(1L, 2L)).thenReturn(true);
+        when(contactService.isActiveContact(2L, 1L)).thenReturn(false);
+
+        IdempotencyService idempotencyService = mock(IdempotencyService.class);
+        RedisStateProperties redisStateProperties = new RedisStateProperties();
+        redisStateProperties.setClientMsgIdTtlSeconds(60);
+
+        EmbeddedChannel forbiddenChannel = new EmbeddedChannel(new WebSocketFrameHandler(
+                channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties,
+                deliveryMapper, metricsService, null, null, idempotencyService, null, null, redisStateProperties));
+        forbiddenChannel.attr(NettyAttr.USER_ID).set(1L);
+
+        forbiddenChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"CHAT\",\"targetUserId\":2,\"clientMsgId\":\"cid-contact\",\"content\":\"hello\"}"));
+        JsonNode forbidden = readOutboundJson(forbiddenChannel).get(0);
+
+        assertEquals("FORBIDDEN", forbidden.get("code").asText());
+        verify(idempotencyService, never()).claimClientMessage(anyLong(), anyString(), any());
+        verify(idempotencyService, never()).releaseClientMessage(anyLong(), anyString());
+
+        when(contactService.isActiveContact(2L, 1L)).thenReturn(true);
+        when(idempotencyService.claimClientMessage(eq(1L), eq("cid-fail"), any())).thenReturn(true);
+        when(messageService.persistMessage(any(MessageDO.class))).thenThrow(new RuntimeException("db down"));
+
+        EmbeddedChannel persistFailChannel = new EmbeddedChannel(new WebSocketFrameHandler(
+                channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties,
+                deliveryMapper, metricsService, null, null, idempotencyService, null, null, redisStateProperties));
+        persistFailChannel.attr(NettyAttr.USER_ID).set(1L);
+
+        persistFailChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"CHAT\",\"targetUserId\":2,\"clientMsgId\":\"cid-fail\",\"content\":\"hello\"}"));
+        JsonNode error = readOutboundJson(persistFailChannel).get(0);
+
+        assertEquals("INTERNAL_ERROR", error.get("code").asText());
+        verify(idempotencyService).claimClientMessage(eq(1L), eq("cid-fail"), any());
+        verify(idempotencyService).releaseClientMessage(1L, "cid-fail");
     }
 
     @Test
@@ -585,6 +627,31 @@ class WebSocketFrameHandlerIntegrationTest {
         assertEquals(7L, pushed1.get(0).get("seq").asLong());
         assertEquals("hello-group", pushed1.get(0).get("content").asText());
         verify(metricsService).incrementGroupPushAttempt(2L);
+    }
+
+    @Test
+    void groupChatShouldReleaseClientMsgIdOnPersistFailure() throws Exception {
+        when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
+
+        IdempotencyService idempotencyService = mock(IdempotencyService.class);
+        RedisStateProperties redisStateProperties = new RedisStateProperties();
+        redisStateProperties.setClientMsgIdTtlSeconds(60);
+
+        when(idempotencyService.claimClientMessage(eq(1L), eq("gc-fail"), any())).thenReturn(true);
+        when(groupMessageService.persistMessage(101L, 1L, "gc-fail", "TEXT", "hello"))
+                .thenThrow(new RuntimeException("db down"));
+
+        EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(
+                channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties,
+                deliveryMapper, metricsService, null, null, idempotencyService, null, null, redisStateProperties));
+        senderChannel.attr(NettyAttr.USER_ID).set(1L);
+
+        senderChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_CHAT\",\"groupId\":101,\"clientMsgId\":\"gc-fail\",\"content\":\"hello\"}"));
+        JsonNode error = readOutboundJson(senderChannel).get(0);
+
+        assertEquals("INTERNAL_ERROR", error.get("code").asText());
+        verify(idempotencyService).claimClientMessage(eq(1L), eq("gc-fail"), any());
+        verify(idempotencyService).releaseClientMessage(1L, "gc-fail");
     }
 
     @Test
