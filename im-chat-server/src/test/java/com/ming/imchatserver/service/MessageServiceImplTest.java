@@ -1,7 +1,9 @@
 package com.ming.imchatserver.service;
 
 import com.ming.imchatserver.dao.MessageDO;
+import com.ming.imchatserver.dao.OutboxMessageDO;
 import com.ming.imchatserver.mapper.MessageMapper;
+import com.ming.imchatserver.mapper.OutboxMapper;
 import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.sensitive.SensitiveWordFilterResult;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
@@ -14,10 +16,13 @@ import org.springframework.dao.DuplicateKeyException;
 import org.mockito.ArgumentCaptor;
 
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.Date;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -223,5 +228,74 @@ class MessageServiceImplTest {
         verify(sensitiveWordService, never()).filter(any());
         assertEquals(MessageContentCodec.MSG_TYPE_FILE, captor.getValue().getMsgType());
         assertEquals(msg.getContent(), captor.getValue().getContent());
+    }
+
+    @Test
+    void recallMessageShouldMarkRetractedForSenderWithinWindow() {
+        MessageMapper mapper = mock(MessageMapper.class);
+        OutboxMapper outboxMapper = mock(OutboxMapper.class);
+        MessageServiceImpl service = new MessageServiceImpl(mapper, outboxMapper);
+
+        MessageDO exist = new MessageDO();
+        exist.setServerMsgId("srv-r1");
+        exist.setFromUserId(1L);
+        exist.setToUserId(2L);
+        exist.setMsgType("TEXT");
+        exist.setContent("\"hello\"");
+        exist.setStatus("SENT");
+        exist.setCreatedAt(new Date());
+
+        MessageDO recalled = new MessageDO();
+        recalled.setServerMsgId("srv-r1");
+        recalled.setFromUserId(1L);
+        recalled.setToUserId(2L);
+        recalled.setMsgType("TEXT");
+        recalled.setContent("\"hello\"");
+        recalled.setStatus("RETRACTED");
+        recalled.setCreatedAt(exist.getCreatedAt());
+        recalled.setRetractedAt(new Date());
+        recalled.setRetractedBy(1L);
+
+        when(mapper.findByServerMsgId("srv-r1")).thenReturn(exist, recalled);
+        when(mapper.updateRetractionByServerMsgId(eq("srv-r1"), eq("RETRACTED"), any(), eq(1L))).thenReturn(1);
+
+        MessageDO result = service.recallMessage(1L, "srv-r1", 120L);
+
+        assertEquals("RETRACTED", result.getStatus());
+        assertNull(result.getContent());
+        assertEquals(1L, result.getRetractedBy());
+        verify(mapper).updateRetractionByServerMsgId(eq("srv-r1"), eq("RETRACTED"), any(), eq(1L));
+        ArgumentCaptor<OutboxMessageDO> outboxCaptor = ArgumentCaptor.forClass(OutboxMessageDO.class);
+        verify(outboxMapper).insert(outboxCaptor.capture());
+        assertTrue(outboxCaptor.getValue().getPayload().contains("\"eventType\":\"RECALL\""));
+    }
+
+    @Test
+    void recallMessageShouldRejectNonSenderAndExpiredMessage() {
+        MessageMapper mapper = mock(MessageMapper.class);
+        MessageServiceImpl service = new MessageServiceImpl(mapper);
+
+        MessageDO foreign = new MessageDO();
+        foreign.setServerMsgId("srv-r2");
+        foreign.setFromUserId(2L);
+        foreign.setStatus("SENT");
+        foreign.setCreatedAt(new Date());
+        when(mapper.findByServerMsgId("srv-r2")).thenReturn(foreign);
+
+        MessageRecallException forbidden = assertThrows(MessageRecallException.class,
+                () -> service.recallMessage(1L, "srv-r2", 120L));
+        assertEquals("FORBIDDEN", forbidden.getCode());
+
+        MessageDO expired = new MessageDO();
+        expired.setServerMsgId("srv-r3");
+        expired.setFromUserId(1L);
+        expired.setStatus("SENT");
+        expired.setCreatedAt(new Date(System.currentTimeMillis() - 200_000L));
+        when(mapper.findByServerMsgId("srv-r3")).thenReturn(expired);
+
+        MessageRecallException expiredEx = assertThrows(MessageRecallException.class,
+                () -> service.recallMessage(1L, "srv-r3", 120L));
+        assertEquals("FORBIDDEN", expiredEx.getCode());
+        verify(mapper, never()).updateRetractionByServerMsgId(eq("srv-r3"), eq("RETRACTED"), any(), eq(1L));
     }
 }

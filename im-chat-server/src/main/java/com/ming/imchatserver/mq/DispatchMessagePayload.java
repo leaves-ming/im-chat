@@ -7,11 +7,18 @@ import lombok.Data;
  */
 @Data
 public class DispatchMessagePayload {
+    public static final String EVENT_TYPE_MESSAGE = "MESSAGE";
+    public static final String EVENT_TYPE_RECALL = "RECALL";
+
     private String eventId;
+    private String eventType;
     private String serverMsgId;
     private String clientMsgId;
     private Long fromUserId;
     private Long toUserId;
     private String content;
     private String msgType;
+    private String status;
+    private String retractedAt;
+    private Long retractedBy;
 }

@@ -14,6 +14,8 @@
     <result property="createdAt" column="created_at" />
     <result property="deliveredAt" column="delivered_at" />
     <result property="ackedAt" column="acked_at" />
+    <result property="retractedAt" column="retracted_at" />
+    <result property="retractedBy" column="retracted_by" />
   </resultMap>
 
   <insert id="insert" parameterType="com.ming.imchatserver.dao.MessageDO" useGeneratedKeys="true" keyProperty="id">
@@ -41,6 +43,16 @@
       <if test="ackedAt != null">acked_at = #{ackedAt},</if>
     </set>
     WHERE server_msg_id = #{serverMsgId}
+  </update>
+
+  <update id="updateRetractionByServerMsgId" parameterType="map">
+    UPDATE im_message
+    SET status = #{status},
+        retracted_at = #{retractedAt},
+        retracted_by = #{retractedBy}
+    WHERE server_msg_id = #{serverMsgId}
+      AND retracted_at IS NULL
+      AND status = #{status}
   </update>
 
   <!-- 按游标分页（升序），cursorCreatedAt/cursorId 表示上次已拉取的最后一条消息位置 -->

@@ -15,6 +15,7 @@ import com.ming.imchatserver.sensitive.SensitiveWordHitException;
 import com.ming.imchatserver.sensitive.SensitiveWordService;
 import com.ming.imchatserver.service.FileService;
 import com.ming.imchatserver.service.MessageService;
+import com.ming.imchatserver.service.MessageRecallException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -39,6 +40,10 @@ public class MessageServiceImpl implements MessageService {
     private static final Logger logger = LoggerFactory.getLogger(MessageServiceImpl.class);
     private static final int OUTBOX_STATUS_NEW = 0;
     private static final String DEFAULT_DISPATCH_TOPIC = "im.msg.dispatch";
+    private static final String STATUS_SENT = "SENT";
+    private static final String STATUS_DELIVERED = "DELIVERED";
+    private static final String STATUS_ACKED = "ACKED";
+    private static final String STATUS_RETRACTED = "RETRACTED";
     private final MessageMapper messageMapper;
     private final OutboxMapper outboxMapper;
     private final ReliabilityProperties reliabilityProperties;
@@ -109,7 +114,7 @@ public class MessageServiceImpl implements MessageService {
 
         String serverMsgId = UUID.randomUUID().toString();
         msg.setServerMsgId(serverMsgId);
-        msg.setStatus(msg.getStatus() == null ? "SENT" : msg.getStatus());
+        msg.setStatus(msg.getStatus() == null ? STATUS_SENT : msg.getStatus());
         String storedContent = MessageContentCodec.encodeForStorage(msgType, logicalContent);
 
         try {
@@ -143,26 +148,14 @@ public class MessageServiceImpl implements MessageService {
         try {
             DispatchMessagePayload payload = new DispatchMessagePayload();
             payload.setEventId(UUID.randomUUID().toString());
+            payload.setEventType(DispatchMessagePayload.EVENT_TYPE_MESSAGE);
             payload.setServerMsgId(msg.getServerMsgId());
             payload.setClientMsgId(msg.getClientMsgId());
             payload.setFromUserId(msg.getFromUserId());
             payload.setToUserId(msg.getToUserId());
             payload.setContent(logicalContent);
             payload.setMsgType(msg.getMsgType());
-
-            OutboxMessageDO outbox = new OutboxMessageDO();
-            outbox.setEventId(payload.getEventId());
-            outbox.setMessageId(msg.getId());
-            String dispatchTopic = reliabilityProperties == null ? DEFAULT_DISPATCH_TOPIC : reliabilityProperties.getDispatchTopic();
-            outbox.setTopic(dispatchTopic);
-            outbox.setTag("SINGLE");
-            outbox.setPayload(objectMapper.writeValueAsString(payload));
-            outbox.setStatus(OUTBOX_STATUS_NEW);
-            outbox.setRetryCount(0);
-            outbox.setNextRetryAt(new Date());
-            outbox.setProcessingAt(null);
-
-            outboxMapper.insert(outbox);
+            appendSingleDispatchOutbox(msg.getId(), payload);
         } catch (Exception ex) {
             throw new IllegalStateException("appendOutbox failed serverMsgId=" + msg.getServerMsgId(), ex);
         }
@@ -189,6 +182,9 @@ public class MessageServiceImpl implements MessageService {
         if (serverMsgId == null || status == null) {
             return 0;
         }
+        if (STATUS_RETRACTED.equalsIgnoreCase(status)) {
+            return 0;
+        }
 
         int targetOrd = statusOrd(status);
         if (targetOrd == 0) {
@@ -198,6 +194,10 @@ public class MessageServiceImpl implements MessageService {
         MessageDO exist = messageMapper.findByServerMsgId(serverMsgId);
         if (exist == null) {
             logger.warn("updateStatusByServerMsgId: serverMsgId={} not found", serverMsgId);
+            return 0;
+        }
+        if (isRetracted(exist)) {
+            logger.debug("updateStatusByServerMsgId: serverMsgId={} already retracted, skip status update", serverMsgId);
             return 0;
         }
 
@@ -227,6 +227,37 @@ public class MessageServiceImpl implements MessageService {
         return updated;
     }
 
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public MessageDO recallMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds) {
+        MessageDO exist = messageMapper.findByServerMsgId(serverMsgId);
+        if (exist == null) {
+            throw new MessageRecallException("INVALID_PARAM", "serverMsgId not found");
+        }
+        if (operatorUserId == null || !operatorUserId.equals(exist.getFromUserId())) {
+            throw new MessageRecallException("FORBIDDEN", "only sender can recall message");
+        }
+        if (isRetracted(exist)) {
+            throw new MessageRecallException("INVALID_PARAM", "message already retracted");
+        }
+        if (!withinRecallWindow(exist.getCreatedAt(), recallWindowSeconds)) {
+            throw new MessageRecallException("FORBIDDEN", "message recall window expired");
+        }
+
+        Date now = new Date();
+        int updated = messageMapper.updateRetractionByServerMsgId(serverMsgId, STATUS_RETRACTED, now, operatorUserId);
+        if (updated <= 0) {
+            MessageDO latest = messageMapper.findByServerMsgId(serverMsgId);
+            if (isRetracted(latest)) {
+                throw new MessageRecallException("INVALID_PARAM", "message already retracted");
+            }
+            throw new IllegalStateException("recall message failed serverMsgId=" + serverMsgId);
+        }
+        MessageDO recalled = decodeMessage(messageMapper.findByServerMsgId(serverMsgId));
+        appendRecallOutbox(recalled);
+        return recalled;
+    }
+
     /**
      * 将状态映射为可比较的序号。
      */
@@ -236,9 +267,9 @@ public class MessageServiceImpl implements MessageService {
         }
         String up = s.toUpperCase();
         return switch (up) {
-            case "SENT" -> 1;
-            case "DELIVERED" -> 2;
-            case "ACKED" -> 3;
+            case STATUS_SENT -> 1;
+            case STATUS_DELIVERED -> 2;
+            case STATUS_ACKED -> 3;
             default -> 0;
         };
     }
@@ -318,6 +349,61 @@ public class MessageServiceImpl implements MessageService {
         decoded.setCreatedAt(message.getCreatedAt());
         decoded.setDeliveredAt(message.getDeliveredAt());
         decoded.setAckedAt(message.getAckedAt());
+        decoded.setRetractedAt(message.getRetractedAt());
+        decoded.setRetractedBy(message.getRetractedBy());
+        if (isRetracted(message)) {
+            decoded.setStatus(STATUS_RETRACTED);
+            decoded.setContent(null);
+        }
         return decoded;
+    }
+
+    private boolean isRetracted(MessageDO message) {
+        return message != null && (STATUS_RETRACTED.equalsIgnoreCase(message.getStatus()) || message.getRetractedAt() != null);
+    }
+
+    private boolean withinRecallWindow(Date createdAt, long recallWindowSeconds) {
+        if (createdAt == null || recallWindowSeconds <= 0) {
+            return false;
+        }
+        long elapsedMs = System.currentTimeMillis() - createdAt.getTime();
+        return elapsedMs >= 0 && elapsedMs <= recallWindowSeconds * 1000L;
+    }
+
+    private void appendRecallOutbox(MessageDO recalled) {
+        if (outboxMapper == null || recalled == null) {
+            return;
+        }
+        try {
+            DispatchMessagePayload payload = new DispatchMessagePayload();
+            payload.setEventId(UUID.randomUUID().toString());
+            payload.setEventType(DispatchMessagePayload.EVENT_TYPE_RECALL);
+            payload.setServerMsgId(recalled.getServerMsgId());
+            payload.setClientMsgId(recalled.getClientMsgId());
+            payload.setFromUserId(recalled.getFromUserId());
+            payload.setToUserId(recalled.getToUserId());
+            payload.setMsgType(recalled.getMsgType());
+            payload.setStatus(STATUS_RETRACTED);
+            payload.setRetractedAt(recalled.getRetractedAt() == null ? null : recalled.getRetractedAt().toInstant().toString());
+            payload.setRetractedBy(recalled.getRetractedBy());
+            appendSingleDispatchOutbox(recalled.getId(), payload);
+        } catch (Exception ex) {
+            throw new IllegalStateException("append recall outbox failed serverMsgId=" + recalled.getServerMsgId(), ex);
+        }
+    }
+
+    private void appendSingleDispatchOutbox(Long messageId, DispatchMessagePayload payload) throws Exception {
+        OutboxMessageDO outbox = new OutboxMessageDO();
+        outbox.setEventId(payload.getEventId());
+        outbox.setMessageId(messageId);
+        String dispatchTopic = reliabilityProperties == null ? DEFAULT_DISPATCH_TOPIC : reliabilityProperties.getDispatchTopic();
+        outbox.setTopic(dispatchTopic);
+        outbox.setTag("SINGLE");
+        outbox.setPayload(objectMapper.writeValueAsString(payload));
+        outbox.setStatus(OUTBOX_STATUS_NEW);
+        outbox.setRetryCount(0);
+        outbox.setNextRetryAt(new Date());
+        outbox.setProcessingAt(null);
+        outboxMapper.insert(outbox);
     }
 }

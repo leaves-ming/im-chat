@@ -227,6 +227,26 @@ class WebSocketFrameHandlerIntegrationTest {
     }
 
     @Test
+    void pullOfflineShouldMaskRetractedMessageContent() throws Exception {
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        channel.attr(NettyAttr.USER_ID).set(2L);
+
+        MessageDO recalled = msg(20L, "srv-r1", Date.from(Instant.parse("2026-03-25T00:00:00Z")), "cid-r1");
+        recalled.setStatus("RETRACTED");
+        recalled.setContent(null);
+        recalled.setRetractedAt(Date.from(Instant.parse("2026-03-25T00:01:00Z")));
+        recalled.setRetractedBy(1L);
+        when(messageService.pullRecent(2L, 1)).thenReturn(pageResult(List.of(recalled), false));
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"PULL_OFFLINE\",\"limit\":1}"));
+        JsonNode resp = readOutboundJson(channel).get(0);
+
+        assertEquals("RETRACTED", resp.get("messages").get(0).get("status").asText());
+        assertTrue(resp.get("messages").get(0).get("content").isNull());
+        assertEquals(1L, resp.get("messages").get(0).get("retractedBy").asLong());
+    }
+
+    @Test
     /**
      * 方法说明。
      */
@@ -686,6 +706,83 @@ class WebSocketFrameHandlerIntegrationTest {
     }
 
     @Test
+    void msgRecallShouldNotifySingleChatParticipants() throws Exception {
+        EmbeddedChannel senderSelf = new EmbeddedChannel();
+        EmbeddedChannel recipient = new EmbeddedChannel();
+        when(channelUserManager.getChannels(1L)).thenReturn(List.of(senderSelf));
+        when(channelUserManager.getChannels(2L)).thenReturn(List.of(recipient));
+
+        MessageDO existing = msg(30L, "srv-recall-1", Date.from(Instant.parse("2026-03-25T00:00:00Z")), "cid-recall-1");
+        MessageDO recalled = msg(30L, "srv-recall-1", Date.from(Instant.parse("2026-03-25T00:00:00Z")), "cid-recall-1");
+        recalled.setStatus("RETRACTED");
+        recalled.setContent(null);
+        recalled.setRetractedAt(Date.from(Instant.parse("2026-03-25T00:01:00Z")));
+        recalled.setRetractedBy(1L);
+        when(messageService.findByServerMsgId("srv-recall-1")).thenReturn(existing);
+        when(messageService.recallMessage(1L, "srv-recall-1", 120L)).thenReturn(recalled);
+
+        EmbeddedChannel requester = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        requester.attr(NettyAttr.USER_ID).set(1L);
+
+        requester.writeInbound(new TextWebSocketFrame("{\"type\":\"MSG_RECALL\",\"serverMsgId\":\"srv-recall-1\"}"));
+
+        JsonNode result = readOutboundJson(requester).get(0);
+
+        assertEquals("MSG_RECALL_RESULT", result.get("type").asText());
+        assertEquals("RETRACTED", result.get("status").asText());
+        assertTrue(result.get("content").isNull());
+        assertTrue(readOutboundJson(senderSelf).isEmpty());
+        assertTrue(readOutboundJson(recipient).isEmpty());
+    }
+
+    @Test
+    void msgRecallShouldNotifyGroupMembers() throws Exception {
+        EmbeddedChannel member2 = new EmbeddedChannel();
+        EmbeddedChannel member3 = new EmbeddedChannel();
+        when(channelUserManager.getChannels(2L)).thenReturn(List.of(member2));
+        when(channelUserManager.getChannels(3L)).thenReturn(List.of(member3));
+        when(groupService.listActiveMemberUserIds(101L)).thenReturn(List.of(2L, 3L));
+
+        GroupMessageDO existing = new GroupMessageDO();
+        existing.setGroupId(101L);
+        existing.setSeq(61L);
+        existing.setServerMsgId("g-recall-1");
+        existing.setFromUserId(1L);
+        existing.setMsgType("TEXT");
+        existing.setContent("hello");
+        existing.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
+
+        GroupMessageDO recalled = new GroupMessageDO();
+        recalled.setGroupId(101L);
+        recalled.setSeq(61L);
+        recalled.setServerMsgId("g-recall-1");
+        recalled.setFromUserId(1L);
+        recalled.setMsgType("TEXT");
+        recalled.setStatus(2);
+        recalled.setCreatedAt(existing.getCreatedAt());
+        recalled.setRetractedAt(Date.from(Instant.parse("2026-03-25T00:01:00Z")));
+        recalled.setRetractedBy(1L);
+
+        when(groupMessageService.findByServerMsgId("g-recall-1")).thenReturn(existing);
+        when(groupMessageService.recallMessage(1L, "g-recall-1", 120L)).thenReturn(recalled);
+
+        EmbeddedChannel requester = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        requester.attr(NettyAttr.USER_ID).set(1L);
+
+        requester.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_MSG_RECALL\",\"serverMsgId\":\"g-recall-1\"}"));
+
+        JsonNode result = readOutboundJson(requester).get(0);
+        JsonNode notify2 = readOutboundJson(member2).get(0);
+        JsonNode notify3 = readOutboundJson(member3).get(0);
+
+        assertEquals("GROUP_MSG_RECALL_RESULT", result.get("type").asText());
+        assertEquals("RETRACTED", result.get("status").asText());
+        assertTrue(result.get("content").isNull());
+        assertEquals("GROUP_MSG_RECALL_NOTIFY", notify2.get("type").asText());
+        assertEquals("GROUP_MSG_RECALL_NOTIFY", notify3.get("type").asText());
+    }
+
+    @Test
     void groupChatShouldRejectWhenSensitiveWordHit() throws Exception {
         when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
         when(groupMessageService.persistMessage(101L, 1L, null, "TEXT", "testban group")).thenThrow(new SensitiveWordHitException());
@@ -988,6 +1085,33 @@ class WebSocketFrameHandlerIntegrationTest {
 
         assertEquals("FILE", result.get("messages").get(0).get("msgType").asText());
         assertEquals("f31", result.get("messages").get(0).get("content").get("fileId").asText());
+    }
+
+    @Test
+    void groupPullOfflineShouldMaskRetractedMessageContent() throws Exception {
+        when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
+        GroupMessageDO recalled = new GroupMessageDO();
+        recalled.setGroupId(101L);
+        recalled.setSeq(41L);
+        recalled.setServerMsgId("g41");
+        recalled.setFromUserId(2L);
+        recalled.setMsgType("TEXT");
+        recalled.setStatus(2);
+        recalled.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
+        recalled.setRetractedAt(Date.from(Instant.parse("2026-03-25T00:01:00Z")));
+        recalled.setRetractedBy(2L);
+        when(groupMessageService.pullOffline(101L, 1L, null, 1))
+                .thenReturn(new GroupMessageService.PullResult(List.of(recalled), false, 41L));
+
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        channel.attr(NettyAttr.USER_ID).set(1L);
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_PULL_OFFLINE\",\"groupId\":101,\"limit\":1}"));
+        JsonNode result = readOutboundJson(channel).get(0);
+
+        assertEquals("RETRACTED", result.get("messages").get(0).get("status").asText());
+        assertTrue(result.get("messages").get(0).get("content").isNull());
+        assertEquals(2L, result.get("messages").get(0).get("retractedBy").asLong());
     }
 
     @Test

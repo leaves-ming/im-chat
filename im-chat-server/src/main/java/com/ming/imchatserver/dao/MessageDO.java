@@ -31,4 +31,8 @@ public class MessageDO {
     private Date deliveredAt;
     /** 已读/确认时间。 */
     private Date ackedAt;
+    /** 撤回时间。 */
+    private Date retractedAt;
+    /** 撤回操作人。 */
+    private Long retractedBy;
 }

@@ -10,6 +10,8 @@ import com.ming.imchatserver.sensitive.SensitiveWordHitException;
 import com.ming.imchatserver.sensitive.SensitiveWordService;
 import com.ming.imchatserver.service.FileService;
 import com.ming.imchatserver.service.GroupMessageService;
+import com.ming.imchatserver.service.GroupService;
+import com.ming.imchatserver.service.MessageRecallException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
@@ -29,21 +31,26 @@ public class GroupMessageServiceImpl implements GroupMessageService {
 
     private static final Logger logger = LoggerFactory.getLogger(GroupMessageServiceImpl.class);
     private static final int MAX_SEQ_ALLOCATE_RETRY = 5;
+    private static final int STATUS_SENT = 1;
+    private static final int STATUS_RETRACTED = 2;
 
     private final GroupMessageMapper groupMessageMapper;
     private final GroupCursorMapper groupCursorMapper;
     private final SensitiveWordService sensitiveWordService;
     private final FileService fileService;
+    private final GroupService groupService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public GroupMessageServiceImpl(GroupMessageMapper groupMessageMapper,
                                    GroupCursorMapper groupCursorMapper,
                                    SensitiveWordService sensitiveWordService,
-                                   FileService fileService) {
+                                   FileService fileService,
+                                   GroupService groupService) {
         this.groupMessageMapper = groupMessageMapper;
         this.groupCursorMapper = groupCursorMapper;
         this.sensitiveWordService = sensitiveWordService;
         this.fileService = fileService;
+        this.groupService = groupService;
     }
 
     @Override
@@ -88,7 +95,7 @@ public class GroupMessageServiceImpl implements GroupMessageService {
         message.setFromUserId(fromUserId);
         message.setMsgType(msgType);
         message.setContent(toStoredContent(msgType, content));
-        message.setStatus(1);
+        message.setStatus(STATUS_SENT);
         message.setCreatedAt(now);
 
         groupMessageMapper.insert(message);
@@ -113,18 +120,7 @@ public class GroupMessageServiceImpl implements GroupMessageService {
 
         List<GroupMessageDO> messages = new ArrayList<>(selected.size());
         for (GroupMessageDO item : selected) {
-            GroupMessageDO decoded = new GroupMessageDO();
-            decoded.setId(item.getId());
-            decoded.setGroupId(item.getGroupId());
-            decoded.setSeq(item.getSeq());
-            decoded.setServerMsgId(item.getServerMsgId());
-            decoded.setClientMsgId(item.getClientMsgId());
-            decoded.setFromUserId(item.getFromUserId());
-            decoded.setMsgType(MessageContentCodec.normalizeMsgType(item.getMsgType()));
-            decoded.setContent(fromStoredContent(decoded.getMsgType(), item.getContent()));
-            decoded.setStatus(item.getStatus());
-            decoded.setCreatedAt(item.getCreatedAt());
-            messages.add(decoded);
+            messages.add(decodeMessage(item));
         }
 
         long nextCursorSeq = baseSeq;
@@ -133,6 +129,46 @@ public class GroupMessageServiceImpl implements GroupMessageService {
         }
         groupCursorMapper.upsertLastPullSeq(groupId, userId, nextCursorSeq);
         return new PullResult(messages, hasMore, nextCursorSeq);
+    }
+
+    @Override
+    public GroupMessageDO findByServerMsgId(String serverMsgId) {
+        return decodeMessage(groupMessageMapper.findByServerMsgId(serverMsgId));
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public GroupMessageDO recallMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds) {
+        GroupMessageDO exist = groupMessageMapper.findByServerMsgId(serverMsgId);
+        if (exist == null) {
+            throw new MessageRecallException("INVALID_PARAM", "serverMsgId not found");
+        }
+        if (groupService == null) {
+            throw new IllegalStateException("group service unavailable");
+        }
+        if (groupService.getActiveMember(exist.getGroupId(), operatorUserId) == null) {
+            throw new MessageRecallException("FORBIDDEN", "operator is not active group member");
+        }
+        if (!groupService.canRecallMessage(exist.getGroupId(), operatorUserId, exist.getFromUserId())) {
+            throw new MessageRecallException("FORBIDDEN", "insufficient role to recall message");
+        }
+        if (isRetracted(exist)) {
+            throw new MessageRecallException("INVALID_PARAM", "message already retracted");
+        }
+        if (!withinRecallWindow(exist.getCreatedAt(), recallWindowSeconds)) {
+            throw new MessageRecallException("FORBIDDEN", "message recall window expired");
+        }
+
+        Date now = new Date();
+        int updated = groupMessageMapper.updateRetractionByServerMsgId(serverMsgId, STATUS_RETRACTED, now, operatorUserId);
+        if (updated <= 0) {
+            GroupMessageDO latest = groupMessageMapper.findByServerMsgId(serverMsgId);
+            if (isRetracted(latest)) {
+                throw new MessageRecallException("INVALID_PARAM", "message already retracted");
+            }
+            throw new IllegalStateException("recall group message failed serverMsgId=" + serverMsgId);
+        }
+        return decodeMessage(groupMessageMapper.findByServerMsgId(serverMsgId));
     }
 
     private String normalizeClientMsgId(String clientMsgId) {
@@ -156,5 +192,37 @@ public class GroupMessageServiceImpl implements GroupMessageService {
 
     private String fromStoredContent(String msgType, String rawContent) {
         return MessageContentCodec.decodeFromStorage(msgType, rawContent);
+    }
+
+    private GroupMessageDO decodeMessage(GroupMessageDO item) {
+        if (item == null) {
+            return null;
+        }
+        GroupMessageDO decoded = new GroupMessageDO();
+        decoded.setId(item.getId());
+        decoded.setGroupId(item.getGroupId());
+        decoded.setSeq(item.getSeq());
+        decoded.setServerMsgId(item.getServerMsgId());
+        decoded.setClientMsgId(item.getClientMsgId());
+        decoded.setFromUserId(item.getFromUserId());
+        decoded.setMsgType(MessageContentCodec.normalizeMsgType(item.getMsgType()));
+        decoded.setStatus(item.getStatus());
+        decoded.setCreatedAt(item.getCreatedAt());
+        decoded.setRetractedAt(item.getRetractedAt());
+        decoded.setRetractedBy(item.getRetractedBy());
+        decoded.setContent(isRetracted(item) ? null : fromStoredContent(decoded.getMsgType(), item.getContent()));
+        return decoded;
+    }
+
+    private boolean isRetracted(GroupMessageDO message) {
+        return message != null && (Integer.valueOf(STATUS_RETRACTED).equals(message.getStatus()) || message.getRetractedAt() != null);
+    }
+
+    private boolean withinRecallWindow(Date createdAt, long recallWindowSeconds) {
+        if (createdAt == null || recallWindowSeconds <= 0) {
+            return false;
+        }
+        long elapsedMs = System.currentTimeMillis() - createdAt.getTime();
+        return elapsedMs >= 0 && elapsedMs <= recallWindowSeconds * 1000L;
     }
 }

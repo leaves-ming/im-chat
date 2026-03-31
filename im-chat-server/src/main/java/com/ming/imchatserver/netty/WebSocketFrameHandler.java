@@ -24,6 +24,7 @@ import com.ming.imchatserver.service.GroupMessageService;
 import com.ming.imchatserver.service.GroupService;
 import com.ming.imchatserver.service.IdempotencyService;
 import com.ming.imchatserver.service.MessageService;
+import com.ming.imchatserver.service.MessageRecallException;
 import com.ming.imchatserver.service.RateLimitService;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
@@ -60,6 +61,9 @@ import java.util.concurrent.RejectedExecutionException;
     private static final int DEFAULT_GROUP_PULL_LIMIT = 50;
     private static final int DEFAULT_CONTACT_LIST_LIMIT = 50;
     private static final int DEFAULT_GROUP_PUSH_BATCH_SIZE = 200;
+    private static final int DEFAULT_MESSAGE_RECALL_WINDOW_SECONDS = 120;
+    private static final String STATUS_RETRACTED = "RETRACTED";
+    private static final int GROUP_STATUS_RETRACTED = 2;
 
     private final ChannelUserManager channelUserManager;
     private final ObjectMapper mapper = new ObjectMapper();
@@ -278,11 +282,15 @@ import java.util.concurrent.RejectedExecutionException;
                 case "GROUP_MEMBER_LIST" -> handleGroupMemberList(ch, fromUserId, node);
                 case "GROUP_CHAT" -> handleGroupChat(ch, fromUserId, node);
                 case "GROUP_PULL_OFFLINE" -> handleGroupPullOffline(ch, fromUserId, node);
+                case "MSG_RECALL" -> handleMessageRecall(ch, fromUserId, node);
+                case "GROUP_MSG_RECALL" -> handleGroupMessageRecall(ch, fromUserId, node);
                 default -> sendError(ch, "UNSUPPORTED_CMD", "unsupported command: " + type);
             }
         } catch (GroupBizException ex) {
             sendError(ch, ex.getCode().name(), ex.getMessage());
         } catch (FileTokenBizException ex) {
+            sendError(ch, ex.getCode(), ex.getMessage());
+        } catch (MessageRecallException ex) {
             sendError(ch, ex.getCode(), ex.getMessage());
         } catch (FileAccessDeniedException ex) {
             sendError(ch, "FORBIDDEN", ex.getMessage());
@@ -585,13 +593,7 @@ import java.util.concurrent.RejectedExecutionException;
         ArrayNode messages = mapper.createArrayNode();
         for (GroupMessageDO message : pullResult.getMessages()) {
             ObjectNode item = mapper.createObjectNode();
-            item.put("msgType", MessageContentCodec.normalizeMsgType(message.getMsgType()));
-            item.put("groupId", message.getGroupId());
-            item.put("seq", message.getSeq());
-            item.put("serverMsgId", message.getServerMsgId());
-            item.put("fromUserId", message.getFromUserId());
-            MessageContentCodec.writeProtocolContent(item, "content", message.getMsgType(), message.getContent());
-            item.put("createdAt", formatAsInstant(message.getCreatedAt()));
+            writeGroupMessageNode(item, message);
             messages.add(item);
         }
         resp.set("messages", messages);
@@ -601,13 +603,7 @@ import java.util.concurrent.RejectedExecutionException;
     private String buildGroupPushPayload(GroupMessageDO message) throws Exception {
         ObjectNode push = mapper.createObjectNode();
         push.put("type", "GROUP_MSG_PUSH");
-        push.put("groupId", message.getGroupId());
-        push.put("seq", message.getSeq());
-        push.put("serverMsgId", message.getServerMsgId());
-        push.put("fromUserId", message.getFromUserId());
-        push.put("msgType", MessageContentCodec.normalizeMsgType(message.getMsgType()));
-        MessageContentCodec.writeProtocolContent(push, "content", message.getMsgType(), message.getContent());
-        push.put("createdAt", formatAsInstant(message.getCreatedAt()));
+        writeGroupMessageNode(push, message);
         return mapper.writeValueAsString(push);
     }
 
@@ -666,6 +662,54 @@ import java.util.concurrent.RejectedExecutionException;
         }
         String serverMsgId = persistResult.getServerMsgId();
         sendServerAck(ch, normalizedClientMsgId, serverMsgId, persistResult.isCreatedNew());
+    }
+
+    private void handleMessageRecall(Channel ch, Long fromUserId, JsonNode node) throws Exception {
+        if (fromUserId == null) {
+            sendError(ch, "UNAUTHORIZED", "user not bound");
+            return;
+        }
+        String serverMsgId = node.path("serverMsgId").asText(null);
+        if (serverMsgId == null || serverMsgId.isBlank()) {
+            sendError(ch, "INVALID_PARAM", "serverMsgId required");
+            return;
+        }
+        if (messageService == null) {
+            sendError(ch, "INTERNAL_ERROR", "message recall service unavailable");
+            return;
+        }
+
+        MessageDO singleMessage = messageService.findByServerMsgId(serverMsgId);
+        if (singleMessage == null) {
+            sendError(ch, "INVALID_PARAM", "serverMsgId not found");
+            return;
+        }
+        MessageDO recalled = messageService.recallMessage(fromUserId, serverMsgId, recallWindowSeconds());
+        sendSingleRecallResult(ch, recalled);
+    }
+
+    private void handleGroupMessageRecall(Channel ch, Long fromUserId, JsonNode node) throws Exception {
+        if (fromUserId == null) {
+            sendError(ch, "UNAUTHORIZED", "user not bound");
+            return;
+        }
+        String serverMsgId = node.path("serverMsgId").asText(null);
+        if (serverMsgId == null || serverMsgId.isBlank()) {
+            sendError(ch, "INVALID_PARAM", "serverMsgId required");
+            return;
+        }
+        if (groupMessageService == null || groupService == null) {
+            sendError(ch, "INTERNAL_ERROR", "group recall service unavailable");
+            return;
+        }
+        GroupMessageDO groupMessage = groupMessageService.findByServerMsgId(serverMsgId);
+        if (groupMessage == null) {
+            sendError(ch, "INVALID_PARAM", "serverMsgId not found");
+            return;
+        }
+        GroupMessageDO recalled = groupMessageService.recallMessage(fromUserId, serverMsgId, recallWindowSeconds());
+        sendGroupRecallResult(ch, recalled);
+        notifyGroupRecall(recalled);
     }
 
     /**
@@ -902,14 +946,7 @@ import java.util.concurrent.RejectedExecutionException;
         ArrayNode arr = mapper.createArrayNode();
         for (MessageDO m : retList) {
             ObjectNode item = mapper.createObjectNode();
-            item.put("serverMsgId", m.getServerMsgId());
-            item.put("clientMsgId", m.getClientMsgId());
-            item.put("fromUserId", m.getFromUserId());
-            item.put("toUserId", m.getToUserId());
-            item.put("msgType", MessageContentCodec.normalizeMsgType(m.getMsgType()));
-            MessageContentCodec.writeProtocolContent(item, "content", m.getMsgType(), m.getContent());
-            item.put("status", m.getStatus());
-            item.put("createdAt", formatAsInstant(m.getCreatedAt()));
+            writeSingleMessageNode(item, m);
             arr.add(item);
         }
         resp.set("messages", arr);
@@ -1000,6 +1037,103 @@ import java.util.concurrent.RejectedExecutionException;
         idempotencyService.releaseClientMessage(userId, clientMsgId);
     }
 
+    private void writeSingleMessageNode(ObjectNode target, MessageDO message) {
+        target.put("serverMsgId", message.getServerMsgId());
+        if (message.getClientMsgId() == null) {
+            target.putNull("clientMsgId");
+        } else {
+            target.put("clientMsgId", message.getClientMsgId());
+        }
+        target.put("fromUserId", message.getFromUserId());
+        target.put("toUserId", message.getToUserId());
+        target.put("msgType", MessageContentCodec.normalizeMsgType(message.getMsgType()));
+        writeMessageContent(target, message.getMsgType(), message.getContent(), isSingleRetracted(message));
+        target.put("status", normalizedSingleStatus(message));
+        target.put("createdAt", formatAsInstant(message.getCreatedAt()));
+        writeRetractionMeta(target, message.getRetractedAt(), message.getRetractedBy());
+    }
+
+    private void writeGroupMessageNode(ObjectNode target, GroupMessageDO message) {
+        target.put("groupId", message.getGroupId());
+        target.put("seq", message.getSeq());
+        target.put("serverMsgId", message.getServerMsgId());
+        target.put("fromUserId", message.getFromUserId());
+        target.put("msgType", MessageContentCodec.normalizeMsgType(message.getMsgType()));
+        writeMessageContent(target, message.getMsgType(), message.getContent(), isGroupRetracted(message));
+        target.put("status", normalizedGroupStatus(message));
+        target.put("createdAt", formatAsInstant(message.getCreatedAt()));
+        writeRetractionMeta(target, message.getRetractedAt(), message.getRetractedBy());
+    }
+
+    private void writeMessageContent(ObjectNode target, String msgType, String content, boolean retracted) {
+        if (retracted) {
+            target.putNull("content");
+            return;
+        }
+        MessageContentCodec.writeProtocolContent(target, "content", msgType, content);
+    }
+
+    private void writeRetractionMeta(ObjectNode target, Date retractedAt, Long retractedBy) {
+        if (retractedAt == null) {
+            target.putNull("retractedAt");
+        } else {
+            target.put("retractedAt", formatAsInstant(retractedAt));
+        }
+        if (retractedBy == null) {
+            target.putNull("retractedBy");
+        } else {
+            target.put("retractedBy", retractedBy);
+        }
+    }
+
+    private boolean isSingleRetracted(MessageDO message) {
+        return message != null && (STATUS_RETRACTED.equalsIgnoreCase(message.getStatus()) || message.getRetractedAt() != null);
+    }
+
+    private boolean isGroupRetracted(GroupMessageDO message) {
+        return message != null && (Integer.valueOf(GROUP_STATUS_RETRACTED).equals(message.getStatus()) || message.getRetractedAt() != null);
+    }
+
+    private String normalizedSingleStatus(MessageDO message) {
+        return isSingleRetracted(message) ? STATUS_RETRACTED : message.getStatus();
+    }
+
+    private String normalizedGroupStatus(GroupMessageDO message) {
+        return isGroupRetracted(message) ? STATUS_RETRACTED : "SENT";
+    }
+
+    private long recallWindowSeconds() {
+        int configured = nettyProperties == null ? 0 : nettyProperties.getMessageRecallWindowSeconds();
+        return configured > 0 ? configured : DEFAULT_MESSAGE_RECALL_WINDOW_SECONDS;
+    }
+
+    private void sendSingleRecallResult(Channel ch, MessageDO message) throws Exception {
+        ObjectNode result = mapper.createObjectNode();
+        result.put("type", "MSG_RECALL_RESULT");
+        writeSingleMessageNode(result, message);
+        ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(result)));
+    }
+
+    private void sendGroupRecallResult(Channel ch, GroupMessageDO message) throws Exception {
+        ObjectNode result = mapper.createObjectNode();
+        result.put("type", "GROUP_MSG_RECALL_RESULT");
+        writeGroupMessageNode(result, message);
+        ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(result)));
+    }
+
+    private void notifyGroupRecall(GroupMessageDO message) throws Exception {
+        ObjectNode notify = mapper.createObjectNode();
+        notify.put("type", "GROUP_MSG_RECALL_NOTIFY");
+        writeGroupMessageNode(notify, message);
+        String payload = mapper.writeValueAsString(notify);
+
+        for (Long userId : groupService.listActiveMemberUserIds(message.getGroupId())) {
+            for (Channel c : channelUserManager.getChannels(userId)) {
+                c.writeAndFlush(new TextWebSocketFrame(payload));
+            }
+        }
+    }
+
     /**
      * 握手成功后的最小同步策略：
      * - 先发 SYNC_START
@@ -1021,14 +1155,7 @@ import java.util.concurrent.RejectedExecutionException;
         ArrayNode arr = mapper.createArrayNode();
         for (MessageDO m : list) {
             ObjectNode mi = mapper.createObjectNode();
-            mi.put("serverMsgId", m.getServerMsgId());
-            mi.put("clientMsgId", m.getClientMsgId());
-            mi.put("fromUserId", m.getFromUserId());
-            mi.put("toUserId", m.getToUserId());
-            mi.put("msgType", MessageContentCodec.normalizeMsgType(m.getMsgType()));
-            MessageContentCodec.writeProtocolContent(mi, "content", m.getMsgType(), m.getContent());
-            mi.put("status", m.getStatus());
-            mi.put("createdAt", formatAsInstant(m.getCreatedAt()));
+            writeSingleMessageNode(mi, m);
             arr.add(mi);
         }
         batchNode.set("messages", arr);

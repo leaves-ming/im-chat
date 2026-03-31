@@ -22,4 +22,6 @@ public class GroupMessageDO {
     private String content;
     private Integer status;
     private Date createdAt;
+    private Date retractedAt;
+    private Long retractedBy;
 }

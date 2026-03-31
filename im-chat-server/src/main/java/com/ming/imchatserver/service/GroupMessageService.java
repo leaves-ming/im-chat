@@ -13,6 +13,10 @@ public interface GroupMessageService {
 
     PullResult pullOffline(Long groupId, Long userId, Long cursorSeq, int limit);
 
+    GroupMessageDO findByServerMsgId(String serverMsgId);
+
+    GroupMessageDO recallMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds);
+
     class PersistResult {
         private final GroupMessageDO message;
 

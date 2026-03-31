@@ -50,4 +50,6 @@ public class NettyProperties {
     private int groupPushParallelism = 4;
     /** 群推送调度队列容量。 */
     private int groupPushQueueCapacity = 1000;
+    /** 消息撤回时间窗口（秒）。 */
+    private int messageRecallWindowSeconds = 120;
 }

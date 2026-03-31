@@ -65,6 +65,14 @@ public interface MessageMapper {
                                   @Param("ackedAt") Date ackedAt);
 
     /**
+     * 按 serverMsgId 更新撤回状态。
+     */
+    int updateRetractionByServerMsgId(@Param("serverMsgId") String serverMsgId,
+                                      @Param("status") String status,
+                                      @Param("retractedAt") Date retractedAt,
+                                      @Param("retractedBy") Long retractedBy);
+
+    /**
      * 基于游标查询离线消息（升序）。
      * <p>
      * 排序语义：created_at ASC, id ASC。

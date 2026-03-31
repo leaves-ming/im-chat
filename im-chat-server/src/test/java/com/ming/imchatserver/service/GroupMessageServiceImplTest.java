@@ -1,5 +1,6 @@
 package com.ming.imchatserver.service;
 
+import com.ming.imchatserver.dao.GroupMemberDO;
 import com.ming.imchatserver.dao.GroupMessageDO;
 import com.ming.imchatserver.mapper.GroupCursorMapper;
 import com.ming.imchatserver.mapper.GroupMessageMapper;
@@ -22,6 +23,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.doAnswer;
@@ -39,7 +41,7 @@ class GroupMessageServiceImplTest {
     void persistMessageShouldRetryWhenSeqConflict() {
         GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
         GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
-        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, null, null);
+        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, null, null, null);
 
         when(groupMessageMapper.findMaxSeq(101L)).thenReturn(9L, 10L);
         when(groupMessageMapper.insert(any(GroupMessageDO.class)))
@@ -61,7 +63,7 @@ class GroupMessageServiceImplTest {
     void pullOfflineShouldKeepAscAndAdvanceCursorWithHasMore() {
         GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
         GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
-        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, null, null);
+        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, null, null, null);
 
         when(groupCursorMapper.findLastPullSeq(101L, 2L)).thenReturn(20L);
         when(groupMessageMapper.findAfterSeq(101L, 20L, 3)).thenReturn(List.of(
@@ -86,7 +88,7 @@ class GroupMessageServiceImplTest {
     void pullOfflineShouldPersistBaseCursorWhenNoNewMessages() {
         GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
         GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
-        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, null, null);
+        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, null, null, null);
 
         when(groupCursorMapper.findLastPullSeq(101L, 2L)).thenReturn(35L);
         when(groupMessageMapper.findAfterSeq(101L, 35L, 3)).thenReturn(List.of());
@@ -104,7 +106,7 @@ class GroupMessageServiceImplTest {
         GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
         GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
         SensitiveWordService sensitiveWordService = mock(SensitiveWordService.class);
-        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, sensitiveWordService, null);
+        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, sensitiveWordService, null, null);
 
         when(sensitiveWordService.filter("badword"))
                 .thenReturn(new SensitiveWordFilterResult(true, SensitiveWordMode.REJECT, "badword", "badword"));
@@ -119,7 +121,7 @@ class GroupMessageServiceImplTest {
         GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
         GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
         SensitiveWordService sensitiveWordService = mock(SensitiveWordService.class);
-        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, sensitiveWordService, null);
+        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, sensitiveWordService, null, null);
         AtomicReference<String> insertedContent = new AtomicReference<>();
 
         when(groupMessageMapper.findMaxSeq(101L)).thenReturn(3L);
@@ -143,7 +145,7 @@ class GroupMessageServiceImplTest {
         GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
         SensitiveWordService sensitiveWordService = mock(SensitiveWordService.class);
         FileService fileService = mock(FileService.class);
-        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, sensitiveWordService, fileService);
+        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, sensitiveWordService, fileService, null);
         AtomicReference<String> insertedContent = new AtomicReference<>();
 
         when(groupMessageMapper.findMaxSeq(101L)).thenReturn(7L);
@@ -165,6 +167,100 @@ class GroupMessageServiceImplTest {
         assertEquals(normalizedFileContent, result.getMessage().getContent());
     }
 
+    @Test
+    void recallMessageShouldMarkGroupMessageRetracted() {
+        GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
+        GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
+        GroupService groupService = mock(GroupService.class);
+        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, null, null, groupService);
+
+        GroupMessageDO exist = msg(41L, "\"hello\"");
+        exist.setServerMsgId("g-r1");
+        exist.setFromUserId(1L);
+        exist.setCreatedAt(new Date());
+
+        GroupMessageDO recalled = msg(41L, "\"hello\"");
+        recalled.setServerMsgId("g-r1");
+        recalled.setFromUserId(1L);
+        recalled.setStatus(2);
+        recalled.setCreatedAt(exist.getCreatedAt());
+        recalled.setRetractedAt(new Date());
+        recalled.setRetractedBy(1L);
+
+        when(groupService.getActiveMember(101L, 1L)).thenReturn(member(1L, 3));
+        when(groupService.canRecallMessage(101L, 1L, 1L)).thenReturn(true);
+        when(groupMessageMapper.findByServerMsgId("g-r1")).thenReturn(exist, recalled);
+        when(groupMessageMapper.updateRetractionByServerMsgId(eq("g-r1"), eq(2), any(), eq(1L))).thenReturn(1);
+
+        GroupMessageDO result = service.recallMessage(1L, "g-r1", 120L);
+
+        assertEquals(Integer.valueOf(2), result.getStatus());
+        assertEquals(1L, result.getRetractedBy());
+        org.junit.jupiter.api.Assertions.assertNull(result.getContent());
+    }
+
+    @Test
+    void recallMessageShouldRejectNonSenderOrExpiredGroupMessage() {
+        GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
+        GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
+        GroupService groupService = mock(GroupService.class);
+        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, null, null, groupService);
+
+        GroupMessageDO foreign = msg(51L, "\"hello\"");
+        foreign.setServerMsgId("g-r2");
+        foreign.setFromUserId(2L);
+        foreign.setCreatedAt(new Date());
+        when(groupService.getActiveMember(101L, 1L)).thenReturn(member(1L, 1));
+        when(groupService.canRecallMessage(101L, 1L, 2L)).thenReturn(false);
+        when(groupMessageMapper.findByServerMsgId("g-r2")).thenReturn(foreign);
+
+        MessageRecallException forbidden = org.junit.jupiter.api.Assertions.assertThrows(MessageRecallException.class,
+                () -> service.recallMessage(1L, "g-r2", 120L));
+        assertEquals("FORBIDDEN", forbidden.getCode());
+
+        GroupMessageDO expired = msg(52L, "\"hello\"");
+        expired.setServerMsgId("g-r3");
+        expired.setFromUserId(1L);
+        expired.setCreatedAt(new Date(System.currentTimeMillis() - 200_000L));
+        when(groupService.getActiveMember(101L, 1L)).thenReturn(member(1L, 1));
+        when(groupService.canRecallMessage(101L, 1L, 1L)).thenReturn(true);
+        when(groupMessageMapper.findByServerMsgId("g-r3")).thenReturn(expired);
+
+        MessageRecallException expiredEx = org.junit.jupiter.api.Assertions.assertThrows(MessageRecallException.class,
+                () -> service.recallMessage(1L, "g-r3", 120L));
+        assertEquals("FORBIDDEN", expiredEx.getCode());
+    }
+
+    @Test
+    void recallMessageShouldAllowHigherRoleRecallLowerRole() {
+        GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
+        GroupCursorMapper groupCursorMapper = mock(GroupCursorMapper.class);
+        GroupService groupService = mock(GroupService.class);
+        GroupMessageServiceImpl service = new GroupMessageServiceImpl(groupMessageMapper, groupCursorMapper, null, null, groupService);
+
+        GroupMessageDO exist = msg(61L, "\"hello\"");
+        exist.setServerMsgId("g-r4");
+        exist.setFromUserId(2L);
+        exist.setCreatedAt(new Date());
+        GroupMessageDO recalled = msg(61L, "\"hello\"");
+        recalled.setServerMsgId("g-r4");
+        recalled.setFromUserId(2L);
+        recalled.setStatus(2);
+        recalled.setCreatedAt(exist.getCreatedAt());
+        recalled.setRetractedAt(new Date());
+        recalled.setRetractedBy(1L);
+
+        when(groupService.getActiveMember(101L, 1L)).thenReturn(member(1L, 3));
+        when(groupService.canRecallMessage(101L, 1L, 2L)).thenReturn(true);
+        when(groupMessageMapper.findByServerMsgId("g-r4")).thenReturn(exist, recalled);
+        when(groupMessageMapper.updateRetractionByServerMsgId(eq("g-r4"), eq(2), any(), eq(1L))).thenReturn(1);
+
+        GroupMessageDO result = service.recallMessage(1L, "g-r4", 120L);
+
+        assertEquals(1L, result.getRetractedBy());
+        org.junit.jupiter.api.Assertions.assertNull(result.getContent());
+    }
+
     private GroupMessageDO msg(Long seq, String rawContent) {
         GroupMessageDO m = new GroupMessageDO();
         m.setGroupId(101L);
@@ -176,5 +272,14 @@ class GroupMessageServiceImplTest {
         m.setStatus(1);
         m.setCreatedAt(new Date());
         return m;
+    }
+
+    private GroupMemberDO member(Long userId, Integer role) {
+        GroupMemberDO member = new GroupMemberDO();
+        member.setGroupId(101L);
+        member.setUserId(userId);
+        member.setRole(role);
+        member.setMemberStatus(1);
+        return member;
     }
 }

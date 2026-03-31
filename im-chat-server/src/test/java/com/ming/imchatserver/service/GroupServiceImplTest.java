@@ -216,6 +216,23 @@ class GroupServiceImplTest {
         verify(groupMemberMapper, never()).markQuit(any(), any());
     }
 
+    @Test
+    void canRecallMessageShouldRespectRoleHierarchy() {
+        GroupMapper groupMapper = mock(GroupMapper.class);
+        GroupMemberMapper groupMemberMapper = mock(GroupMemberMapper.class);
+        GroupService service = new GroupServiceImpl(groupMapper, groupMemberMapper);
+
+        when(groupMapper.findById(1L)).thenReturn(activeGroup(1L, 9L, 1000));
+        when(groupMemberMapper.findActiveMember(1L, 9L)).thenReturn(memberWithRole(9L, GroupDomainConstants.MEMBER_ROLE_OWNER));
+        when(groupMemberMapper.findActiveMember(1L, 8L)).thenReturn(memberWithRole(8L, GroupDomainConstants.MEMBER_ROLE_ADMIN));
+        when(groupMemberMapper.findActiveMember(1L, 7L)).thenReturn(memberWithRole(7L, GroupDomainConstants.MEMBER_ROLE_MEMBER));
+
+        assertTrue(service.canRecallMessage(1L, 9L, 8L));
+        assertTrue(service.canRecallMessage(1L, 8L, 7L));
+        assertFalse(service.canRecallMessage(1L, 7L, 8L));
+        assertFalse(service.canRecallMessage(1L, 8L, 9L));
+    }
+
     private GroupDO activeGroup(Long id, Long ownerUserId, int memberLimit) {
         GroupDO group = new GroupDO();
         group.setId(id);
@@ -229,6 +246,12 @@ class GroupServiceImplTest {
         GroupMemberDO member = new GroupMemberDO();
         member.setUserId(userId);
         member.setMemberStatus(GroupDomainConstants.MEMBER_STATUS_ACTIVE);
+        return member;
+    }
+
+    private GroupMemberDO memberWithRole(Long userId, Integer role) {
+        GroupMemberDO member = member(userId);
+        member.setRole(role);
         return member;
     }
 }

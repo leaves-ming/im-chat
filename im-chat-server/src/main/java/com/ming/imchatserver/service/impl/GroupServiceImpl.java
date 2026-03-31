@@ -132,6 +132,31 @@ public class GroupServiceImpl implements GroupService {
     }
 
     @Override
+    public GroupMemberDO getActiveMember(Long groupId, Long userId) {
+        if (groupId == null || groupId <= 0 || userId == null || userId <= 0) {
+            return null;
+        }
+        requireActiveGroup(groupId);
+        return groupMemberMapper.findActiveMember(groupId, userId);
+    }
+
+    @Override
+    public boolean canRecallMessage(Long groupId, Long operatorUserId, Long targetUserId) {
+        GroupMemberDO operator = getActiveMember(groupId, operatorUserId);
+        if (operator == null || targetUserId == null || targetUserId <= 0) {
+            return false;
+        }
+        if (operatorUserId != null && operatorUserId.equals(targetUserId)) {
+            return true;
+        }
+        GroupMemberDO target = getActiveMember(groupId, targetUserId);
+        if (target == null) {
+            return false;
+        }
+        return roleLevel(operator.getRole()) > roleLevel(target.getRole());
+    }
+
+    @Override
     public List<Long> listActiveMemberUserIds(Long groupId) {
         if (groupId == null || groupId <= 0) {
             throw new GroupBizException(GroupErrorCode.INVALID_PARAM, "invalid groupId");
@@ -160,5 +185,17 @@ public class GroupServiceImpl implements GroupService {
 
     private String generateGroupNo() {
         return "g" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+    }
+
+    private int roleLevel(Integer role) {
+        if (role == null) {
+            return 0;
+        }
+        return switch (role) {
+            case GroupDomainConstants.MEMBER_ROLE_OWNER -> 3;
+            case GroupDomainConstants.MEMBER_ROLE_ADMIN -> 2;
+            case GroupDomainConstants.MEMBER_ROLE_MEMBER -> 1;
+            default -> 0;
+        };
     }
 }

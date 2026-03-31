@@ -30,6 +30,11 @@ public interface MessageService {
     int updateStatusByServerMsgId(String serverMsgId, String status);
 
     /**
+     * 撤回单聊消息。
+     */
+    MessageDO recallMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds);
+
+    /**
      * 根据 serverMsgId 查询消息。
      *
      * @param serverMsgId 服务端消息 ID

@@ -5,6 +5,7 @@ import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
 
@@ -39,7 +40,9 @@ public interface GroupMessageMapper {
                    msg_type AS msgType,
                    content,
                    status,
-                   created_at AS createdAt
+                   created_at AS createdAt,
+                   retracted_at AS retractedAt,
+                   retracted_by AS retractedBy
             FROM im_group_message
             WHERE group_id = #{groupId}
               AND seq > #{cursorSeq}
@@ -62,4 +65,37 @@ public interface GroupMessageMapper {
             """)
     Integer existsFileForActiveMember(@Param("fileId") String fileId,
                                       @Param("userId") Long userId);
+
+    @Select("""
+            SELECT id,
+                   group_id AS groupId,
+                   seq,
+                   server_msg_id AS serverMsgId,
+                   client_msg_id AS clientMsgId,
+                   from_user_id AS fromUserId,
+                   msg_type AS msgType,
+                   content,
+                   status,
+                   created_at AS createdAt,
+                   retracted_at AS retractedAt,
+                   retracted_by AS retractedBy
+            FROM im_group_message
+            WHERE server_msg_id = #{serverMsgId}
+            LIMIT 1
+            """)
+    GroupMessageDO findByServerMsgId(@Param("serverMsgId") String serverMsgId);
+
+    @Update("""
+            UPDATE im_group_message
+            SET status = #{status},
+                retracted_at = #{retractedAt},
+                retracted_by = #{retractedBy}
+            WHERE server_msg_id = #{serverMsgId}
+              AND retracted_at IS NULL
+              AND status <> #{status}
+            """)
+    int updateRetractionByServerMsgId(@Param("serverMsgId") String serverMsgId,
+                                      @Param("status") Integer status,
+                                      @Param("retractedAt") java.util.Date retractedAt,
+                                      @Param("retractedBy") Long retractedBy);
 }

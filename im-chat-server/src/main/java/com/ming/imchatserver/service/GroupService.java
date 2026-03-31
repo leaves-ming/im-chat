@@ -19,6 +19,10 @@ public interface GroupService {
 
     boolean isActiveMember(Long groupId, Long userId);
 
+    GroupMemberDO getActiveMember(Long groupId, Long userId);
+
+    boolean canRecallMessage(Long groupId, Long operatorUserId, Long targetUserId);
+
     List<Long> listActiveMemberUserIds(Long groupId);
 
     class CreateGroupResult {
