@@ -39,7 +39,7 @@ class OutboxRelayJobTest {
         when(outboxMapper.findReadyBatch(any(Date.class), eq(10))).thenReturn(List.of(outbox));
         when(outboxMapper.claimForProcessing(eq(1L), any(Date.class))).thenReturn(0);
 
-        OutboxRelayJob job = new OutboxRelayJob(outboxMapper, dispatchProducer, properties, metricsService);
+        OutboxRelayJob job = new OutboxRelayJob(outboxMapper, dispatchProducer, properties, metricsService, null);
         job.relay();
 
         verify(dispatchProducer, never()).sendSingleDispatch(any());
@@ -64,7 +64,7 @@ class OutboxRelayJobTest {
         when(outboxMapper.findReadyBatch(any(Date.class), eq(10))).thenReturn(List.of(outbox));
         when(outboxMapper.claimForProcessing(eq(2L), any(Date.class))).thenReturn(1);
 
-        OutboxRelayJob job = new OutboxRelayJob(outboxMapper, dispatchProducer, properties, metricsService);
+        OutboxRelayJob job = new OutboxRelayJob(outboxMapper, dispatchProducer, properties, metricsService, null);
         job.relay();
 
         verify(metricsService).incrementRelaySend();
@@ -91,7 +91,7 @@ class OutboxRelayJobTest {
         when(outboxMapper.claimForProcessing(eq(3L), any(Date.class))).thenReturn(1);
         doThrow(new IllegalStateException("mq down")).when(dispatchProducer).sendSingleDispatch(any(DispatchMessagePayload.class));
 
-        OutboxRelayJob job = new OutboxRelayJob(outboxMapper, dispatchProducer, properties, metricsService);
+        OutboxRelayJob job = new OutboxRelayJob(outboxMapper, dispatchProducer, properties, metricsService, null);
         job.relay();
 
         verify(metricsService).incrementRelaySend();

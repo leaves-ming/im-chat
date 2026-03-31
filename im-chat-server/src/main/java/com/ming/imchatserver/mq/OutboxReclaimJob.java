@@ -2,12 +2,14 @@ package com.ming.imchatserver.mq;
 
 import com.ming.imchatserver.config.ReliabilityProperties;
 import com.ming.imchatserver.mapper.OutboxMapper;
+import com.ming.imchatserver.service.DistributedCoordinationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.util.Date;
+import java.time.Duration;
 
 /**
  * 回收超时 PROCESSING 的 outbox，避免实例宕机后永久卡死。
@@ -23,14 +25,34 @@ public class OutboxReclaimJob {
 
     private final OutboxMapper outboxMapper;
     private final ReliabilityProperties reliabilityProperties;
+    private final DistributedCoordinationService distributedCoordinationService;
 
-    public OutboxReclaimJob(OutboxMapper outboxMapper, ReliabilityProperties reliabilityProperties) {
+    public OutboxReclaimJob(OutboxMapper outboxMapper,
+                            ReliabilityProperties reliabilityProperties,
+                            DistributedCoordinationService distributedCoordinationService) {
         this.outboxMapper = outboxMapper;
         this.reliabilityProperties = reliabilityProperties;
+        this.distributedCoordinationService = distributedCoordinationService;
     }
 
     @Scheduled(fixedDelayString = "${im.reliability.relay-fixed-delay-ms:1000}")
     public void reclaimTimeoutProcessing() {
+        if (distributedCoordinationService != null) {
+            boolean executed = distributedCoordinationService.executeIfLeader(
+                    "job",
+                    "outbox_reclaim",
+                    Duration.ZERO,
+                    Duration.ofSeconds(30),
+                    this::doReclaimTimeoutProcessing);
+            if (!executed) {
+                logger.warn("skip outbox reclaim on this instance because distributed lock was not acquired");
+            }
+            return;
+        }
+        doReclaimTimeoutProcessing();
+    }
+
+    private void doReclaimTimeoutProcessing() {
         long timeoutMs = Math.max(1000L, reliabilityProperties.getProcessingTimeoutMs());
         Date now = new Date();
         Date timeoutBefore = new Date(now.getTime() - timeoutMs);

@@ -14,4 +14,6 @@ import io.netty.util.AttributeKey;
     public static final AttributeKey<Boolean> AUTH_OK = AttributeKey.valueOf("AUTH_OK");    /** 是否已完成“用户-连接”绑定。 */
     
     public static final AttributeKey<Boolean> BOUND = AttributeKey.valueOf("BOUND");
+    /** 当前连接所属设备 ID。 */
+    public static final AttributeKey<String> DEVICE_ID = AttributeKey.valueOf("DEVICE_ID");
 }

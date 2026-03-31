@@ -1,5 +1,7 @@
 package com.ming.imchatserver.netty;
 
+import com.ming.imchatserver.config.RedisStateProperties;
+import com.ming.imchatserver.service.PresenceService;
 import io.netty.channel.Channel;
 import io.netty.channel.group.ChannelGroup;
 import io.netty.channel.group.DefaultChannelGroup;
@@ -22,6 +24,13 @@ import java.util.concurrent.ConcurrentHashMap;
 public class ChannelUserManager {
 
     private static final Logger logger = LoggerFactory.getLogger(ChannelUserManager.class);
+    private final PresenceService presenceService;
+    private final RedisStateProperties redisStateProperties;
+
+    public ChannelUserManager(PresenceService presenceService, RedisStateProperties redisStateProperties) {
+        this.presenceService = presenceService;
+        this.redisStateProperties = redisStateProperties;
+    }
 
     // 全部在线 channel
     private final ChannelGroup allChannels = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
@@ -67,6 +76,8 @@ public class ChannelUserManager {
             channelToUser.put(cid, userId);
             userChannels.computeIfAbsent(userId, k -> ConcurrentHashMap.newKeySet()).add(channel);
             allChannels.add(channel);
+            String deviceId = channel.attr(NettyAttr.DEVICE_ID).get();
+            presenceService.register(userId, redisStateProperties.getServerId(), deviceId, cid, System.currentTimeMillis());
             logger.info("bind user {} to channel {}", userId, channel.id());
         }
     }
@@ -86,6 +97,7 @@ public class ChannelUserManager {
                 userChannels.remove(userId);
             }
         }
+        presenceService.unregister(userId, cid);
         logger.info("unbind user {} from channel {}", userId, channel.id());
     }
     /**
@@ -104,6 +116,7 @@ public class ChannelUserManager {
                     userChannels.remove(userId);
                 }
             }
+            presenceService.unregister(userId, cid);
             logger.info("removed channel {} from user {} mapping", channel.id(), userId);
         } else {
             logger.debug("unbindByChannel: no user mapping found for channel {}", channel.id());
@@ -136,5 +149,18 @@ public class ChannelUserManager {
     
     public int onlineCount() {
         return userChannels.size();
+    }
+
+    public void refreshHeartbeat(Channel channel) {
+        if (channel == null) {
+            return;
+        }
+        Long userId = channelToUser.get(channel.id().asLongText());
+        if (userId == null) {
+            userId = channel.attr(NettyAttr.USER_ID).get();
+        }
+        if (userId != null) {
+            presenceService.refreshHeartbeat(userId, channel.id().asLongText(), System.currentTimeMillis());
+        }
     }
 }

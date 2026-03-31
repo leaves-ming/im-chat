@@ -52,6 +52,8 @@ im/
 - `GROUP_CHAT` 采用预聚合在线 channel、分批异步推送与失败统计，降低大群推送对 I/O 线程的冲击。
 - Outbox 稳定性
 - backlog 口径包含 `NEW/FAILED/PROCESSING`，支持 `PROCESSING` 超时回收。
+- Redis 跨实例状态
+- 提供 `PresenceService / IdempotencyService / RateLimitService / DistributedCoordinationService`，统一管理在线视图、短期防重放、固定窗口限流和 Redisson 协调锁。
 - 文件消息（服务端信任模型）
 - 支持 `POST /api/file/upload` 本地上传返回 `uploadToken`，`CHAT / GROUP_CHAT` 在 `FILE` 消息中仅传 `uploadToken`，服务端回填结构化文件内容。
 
@@ -362,6 +364,14 @@ CREATE DATABASE IF NOT EXISTS im_chat DEFAULT CHARACTER SET utf8mb4;
 - `im.file.allow-owner-download-without-message`（默认 `true`，文件 owner 可直接下载）
 - `im.file.allowed-content-types`（允许上传的 MIME 类型）
 - `im.file.allowed-extensions`（允许上传的扩展名）
+- `im.redis.server-id`（当前实例 ID，用于跨机在线端记录与协调 owner 标识）
+- `im.redis.presence-ttl-seconds`（默认 `180`，在线端 TTL）
+- `im.redis.client-msg-id-ttl-seconds`（默认 `600`，`clientMsgId` 短期幂等窗口）
+- `im.rate-limit.login-fail.*`（登录失败限流窗口）
+- `im.rate-limit.message-send.*`（消息发送限流窗口）
+- `im.rate-limit.file-upload.*`（文件上传限流窗口）
+- `im.rate-limit.file-download.*`（文件下载限流窗口）
+- `redisson.single-server-config.address`（Redisson 单机 Redis 连接）
 
 ## 5.4 启动服务
 
@@ -424,7 +434,15 @@ mvn -pl im-chat-server test
   - relay claim 后状态进入 `PROCESSING`
   - 若超过 `im.reliability.processing-timeout-ms` 未完成，则定时任务回收为 `FAILED`
   - 若历史脏数据里 `status=PROCESSING` 但 `processing_at` 为空，则按 `updated_at` 超时回收
-  - 回收时会设置 `next_retry_at=NOW()`，重新纳入 backlog
+- 回收时会设置 `next_retry_at=NOW()`，重新纳入 backlog
+- `OutboxRelayJob` 与 `OutboxReclaimJob` 在多实例下通过 Redisson 锁互斥执行；未拿到锁的实例会明确记录日志并跳过本轮执行。
+- `GroupPushCoordinator` 保留本地同 group 串行队列，同时预留 `im:coord:*` 分布式锁做 group 级跨机串行协调；协调状态不是业务真相。
+
+## 7.1 Redis 状态层
+
+- 在线状态同时保留本地 `ChannelUserManager` 和 Redis 跨实例视图。Redis key 统一使用 `im:presence:*` 前缀，支持 `userId -> 在线 session 集合`，每个 session 记录 `serverId/deviceId/sessionId/lastHeartbeatAt`。
+- 短期幂等与防重放统一走 `IdempotencyService`，key 统一使用 `im:idempotent:*` 前缀，当前覆盖 `clientMsgId` 去重窗口与一次性下载签名消费标记。
+- 固定窗口限流统一走 `RateLimitService`，key 统一使用 `im:rate_limit:*` 前缀，当前覆盖登录失败、发消息、文件上传、文件下载四类计数器，并支持按 `userId` / `IP` / `deviceId` 扩展。
 
 ## 8. 敏感词示例
 

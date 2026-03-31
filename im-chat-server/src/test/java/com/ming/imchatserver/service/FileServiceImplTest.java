@@ -9,6 +9,8 @@ import com.ming.imchatserver.mapper.FileRecordMapper;
 import com.ming.imchatserver.mapper.GroupMessageMapper;
 import com.ming.imchatserver.mapper.MessageMapper;
 import com.ming.imchatserver.mapper.UploadTokenMapper;
+import com.ming.imchatserver.redis.RedisKeyFactory;
+import com.ming.imchatserver.service.impl.IdempotencyServiceImpl;
 import com.ming.imchatserver.service.impl.FileServiceImpl;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -39,6 +41,7 @@ class FileServiceImplTest {
         GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
         FileStorageService fileStorageService = mock(FileStorageService.class);
         StringRedisTemplate stringRedisTemplate = mock(StringRedisTemplate.class);
+        IdempotencyService idempotencyService = new IdempotencyServiceImpl(stringRedisTemplate, new RedisKeyFactory());
         FileStorageProperties properties = new FileStorageProperties();
         properties.setDownloadSignSecret("secret-1");
         properties.setDownloadSignExpireSeconds(300L);
@@ -48,7 +51,7 @@ class FileServiceImplTest {
         when(messageMapper.existsFileParticipant("f_1", 9L)).thenReturn(1);
 
         FileServiceImpl service = new FileServiceImpl(
-                fileRecordMapper, uploadTokenMapper, messageMapper, groupMessageMapper, fileStorageService, properties, stringRedisTemplate);
+                fileRecordMapper, uploadTokenMapper, messageMapper, groupMessageMapper, fileStorageService, properties, idempotencyService);
 
         FileService.DownloadUrlResult result = service.createDownloadUrl(9L, "f_1");
 
@@ -65,6 +68,7 @@ class FileServiceImplTest {
         GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
         FileStorageService fileStorageService = mock(FileStorageService.class);
         StringRedisTemplate stringRedisTemplate = mock(StringRedisTemplate.class);
+        IdempotencyService idempotencyService = new IdempotencyServiceImpl(stringRedisTemplate, new RedisKeyFactory());
         FileStorageProperties properties = new FileStorageProperties();
         properties.setDownloadSignSecret("secret-1");
         properties.setDownloadSignExpireSeconds(-1L);
@@ -72,7 +76,7 @@ class FileServiceImplTest {
         when(messageMapper.existsFileParticipant("f_1", 9L)).thenReturn(1);
 
         FileServiceImpl service = new FileServiceImpl(
-                fileRecordMapper, uploadTokenMapper, messageMapper, groupMessageMapper, fileStorageService, properties, stringRedisTemplate);
+                fileRecordMapper, uploadTokenMapper, messageMapper, groupMessageMapper, fileStorageService, properties, idempotencyService);
 
         FileService.DownloadUrlResult result = service.createDownloadUrl(9L, "f_1");
 
@@ -92,6 +96,7 @@ class FileServiceImplTest {
         ValueOperations<String, String> valueOperations = mock(ValueOperations.class);
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
         when(valueOperations.setIfAbsent(anyString(), anyString(), any())).thenReturn(true, false);
+        IdempotencyService idempotencyService = new IdempotencyServiceImpl(stringRedisTemplate, new RedisKeyFactory());
 
         FileStorageProperties properties = new FileStorageProperties();
         properties.setDownloadSignSecret("secret-1");
@@ -108,7 +113,7 @@ class FileServiceImplTest {
         when(fileStorageService.load("storage-key", "note.txt", "text/plain")).thenReturn(storedFileResource);
 
         FileServiceImpl service = new FileServiceImpl(
-                fileRecordMapper, uploadTokenMapper, messageMapper, groupMessageMapper, fileStorageService, properties, stringRedisTemplate);
+                fileRecordMapper, uploadTokenMapper, messageMapper, groupMessageMapper, fileStorageService, properties, idempotencyService);
 
         FileService.DownloadUrlResult result = service.createDownloadUrl(9L, "f_1");
         long exp = queryLong(result.downloadUrl(), "exp");
@@ -145,4 +150,3 @@ class FileServiceImplTest {
         return Long.parseLong(queryValue(url, key));
     }
 }
-

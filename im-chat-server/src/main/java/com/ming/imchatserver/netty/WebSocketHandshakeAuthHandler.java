@@ -110,6 +110,8 @@ import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
                 // set attr for downstream handlers - do NOT bind here. BIND must happen after handshake complete.
                 ctx.channel().attr(NettyAttr.USER_ID).set(u.userId);
                 ctx.channel().attr(NettyAttr.AUTH_OK).set(Boolean.TRUE);
+                String deviceId = req.headers().get("X-Device-Id");
+                ctx.channel().attr(NettyAttr.DEVICE_ID).set(deviceId == null ? "default" : deviceId.trim());
 
                 // If token came via query (e.g., /ws?token=xxx) we must normalize URI so WebSocketServerProtocolHandler can match path.
                 // Remove query part from request URI.

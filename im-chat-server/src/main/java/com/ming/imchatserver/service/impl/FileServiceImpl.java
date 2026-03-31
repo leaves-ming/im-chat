@@ -18,9 +18,8 @@ import com.ming.imchatserver.mapper.UploadTokenMapper;
 import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.service.FileService;
 import com.ming.imchatserver.service.FileTokenBizException;
+import com.ming.imchatserver.service.IdempotencyService;
 import org.springframework.stereotype.Service;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.transaction.annotation.Transactional;
 
 import javax.crypto.Mac;
@@ -54,7 +53,7 @@ public class FileServiceImpl implements FileService {
     private final GroupMessageMapper groupMessageMapper;
     private final FileStorageService fileStorageService;
     private final FileStorageProperties fileStorageProperties;
-    private final StringRedisTemplate stringRedisTemplate;
+    private final IdempotencyService idempotencyService;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final SecureRandom secureRandom = new SecureRandom();
 
@@ -64,14 +63,14 @@ public class FileServiceImpl implements FileService {
                            GroupMessageMapper groupMessageMapper,
                            FileStorageService fileStorageService,
                            FileStorageProperties fileStorageProperties,
-                           StringRedisTemplate stringRedisTemplate) {
+                           IdempotencyService idempotencyService) {
         this.fileRecordMapper = fileRecordMapper;
         this.uploadTokenMapper = uploadTokenMapper;
         this.messageMapper = messageMapper;
         this.groupMessageMapper = groupMessageMapper;
         this.fileStorageService = fileStorageService;
         this.fileStorageProperties = fileStorageProperties;
-        this.stringRedisTemplate = stringRedisTemplate;
+        this.idempotencyService = idempotencyService;
     }
 
     @Override
@@ -316,14 +315,11 @@ public class FileServiceImpl implements FileService {
         if (!fileStorageProperties.isDownloadSignOneTime()) {
             return;
         }
-        if (stringRedisTemplate == null) {
-            throw new IllegalStateException("redis unavailable for one-time download signature");
-        }
         long ttlSeconds = Math.max(1L, expireAt - currentEpochSecond());
-        String key = "im:file:download:sig:" + sha256Base64Url(signature);
-        ValueOperations<String, String> ops = stringRedisTemplate.opsForValue();
-        Boolean created = ops.setIfAbsent(key, "1", java.time.Duration.ofSeconds(ttlSeconds));
-        if (!Boolean.TRUE.equals(created)) {
+        if (idempotencyService == null) {
+            throw new IllegalStateException("idempotency service unavailable for one-time download signature");
+        }
+        if (!idempotencyService.consumeOnce("download_sig", sha256Base64Url(signature), java.time.Duration.ofSeconds(ttlSeconds))) {
             throw new FileAccessDeniedException("download signature already consumed");
         }
     }

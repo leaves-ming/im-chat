@@ -1,7 +1,9 @@
 package com.ming.imchatserver.netty;
 
+import com.ming.imchatserver.service.DistributedCoordinationService;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -16,6 +18,15 @@ import java.util.concurrent.ConcurrentHashMap;
 public class GroupPushCoordinator {
 
     private final ConcurrentHashMap<Long, CompletableFuture<Void>> groupPushTails = new ConcurrentHashMap<>();
+    private final DistributedCoordinationService distributedCoordinationService;
+
+    public GroupPushCoordinator() {
+        this(null);
+    }
+
+    public GroupPushCoordinator(DistributedCoordinationService distributedCoordinationService) {
+        this.distributedCoordinationService = distributedCoordinationService;
+    }
 
     public void enqueue(Long groupId, GroupPushTask task) {
         if (groupId == null || task == null) {
@@ -23,7 +34,18 @@ public class GroupPushCoordinator {
         }
         groupPushTails.compute(groupId, (key, tail) -> {
             CompletableFuture<Void> previous = tail == null ? CompletableFuture.completedFuture(null) : tail.exceptionally(ex -> null);
-            CompletableFuture<Void> next = previous.thenCompose(ignored -> task.run());
+            CompletableFuture<Void> next = previous.thenCompose(ignored -> {
+                if (distributedCoordinationService == null) {
+                    return task.run();
+                }
+                return distributedCoordinationService.executeWithLockOrLocalFallback(
+                        "group_push",
+                        String.valueOf(groupId),
+                        Duration.ofMillis(200),
+                        Duration.ofSeconds(10),
+                        task::run,
+                        task::run);
+            });
             next.whenComplete((ignored, ex) -> groupPushTails.compute(key, (innerKey, current) -> current == next ? null : current));
             return next;
         });

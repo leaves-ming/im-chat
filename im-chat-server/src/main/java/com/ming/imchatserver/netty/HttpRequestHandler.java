@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ming.imchatserver.config.FileStorageProperties;
 import com.ming.imchatserver.config.NettyProperties;
+import com.ming.imchatserver.config.RateLimitProperties;
 import com.ming.imchatserver.file.FileAccessDeniedException;
 import com.ming.imchatserver.file.FileMetadata;
 import com.ming.imchatserver.file.FileNotFoundBizException;
@@ -13,6 +14,7 @@ import com.ming.imchatserver.file.StoredFileResource;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.service.AuthService;
 import com.ming.imchatserver.service.FileService;
+import com.ming.imchatserver.service.RateLimitService;
 import io.netty.buffer.ByteBufInputStream;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFutureListener;
@@ -60,29 +62,43 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
     private final MetricsService metricsService;
     private final FileService fileService;
     private final FileStorageProperties fileStorageProperties;
+    private final RateLimitService rateLimitService;
+    private final RateLimitProperties rateLimitProperties;
     private final ObjectMapper mapper = new ObjectMapper();
 
     public HttpRequestHandler(NettyProperties properties,
                               AuthService authService,
                               MetricsService metricsService,
                               FileService fileService,
-                              FileStorageProperties fileStorageProperties) {
+                              FileStorageProperties fileStorageProperties,
+                              RateLimitService rateLimitService,
+                              RateLimitProperties rateLimitProperties) {
         this.properties = properties;
         this.authService = authService;
         this.metricsService = metricsService;
         this.fileService = fileService;
         this.fileStorageProperties = fileStorageProperties;
+        this.rateLimitService = rateLimitService;
+        this.rateLimitProperties = rateLimitProperties;
+    }
+
+    public HttpRequestHandler(NettyProperties properties,
+                              AuthService authService,
+                              MetricsService metricsService,
+                              FileService fileService,
+                              FileStorageProperties fileStorageProperties) {
+        this(properties, authService, metricsService, fileService, fileStorageProperties, null, null);
     }
 
     /**
      * 单元测试兼容构造函数。
      */
     public HttpRequestHandler(NettyProperties properties, AuthService authService) {
-        this(properties, authService, null, null, null);
+        this(properties, authService, null, null, null, null, null);
     }
 
     public HttpRequestHandler(NettyProperties properties, AuthService authService, MetricsService metricsService) {
-        this(properties, authService, metricsService, null, null);
+        this(properties, authService, metricsService, null, null, null, null);
     }
 
     @Override
@@ -141,6 +157,17 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
                 return;
             }
             ObjectNode resp = mapper.createObjectNode();
+            String remoteIp = resolveRemoteIp(ctx, req);
+            String deviceId = req.headers().get("X-Device-Id");
+            if (!consumeRateLimit("login_fail", "ip", remoteIp,
+                    rateLimitProperties == null ? 0L : rateLimitProperties.getLoginFail().getLimit(),
+                    rateLimitProperties == null ? 0L : rateLimitProperties.getLoginFail().getWindowSeconds())) {
+                writeJson(ctx, "{\"code\":429,\"msg\":\"too many requests\"}", HttpResponseStatus.TOO_MANY_REQUESTS);
+                return;
+            }
+            consumeRateLimit("login_fail", "deviceId", deviceId,
+                    rateLimitProperties == null ? 0L : rateLimitProperties.getLoginFail().getLimit(),
+                    rateLimitProperties == null ? 0L : rateLimitProperties.getLoginFail().getWindowSeconds());
             resp.put("code", 401);
             resp.put("msg", "invalid credentials");
             writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.UNAUTHORIZED);
@@ -161,6 +188,12 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
         Optional<AuthService.AuthUser> authUser = authenticate(req);
         if (authUser.isEmpty()) {
             writeJson(ctx, "{\"code\":401,\"msg\":\"unauthorized\"}", HttpResponseStatus.UNAUTHORIZED);
+            return;
+        }
+        if (!consumeRateLimit("file_upload", "userId", String.valueOf(authUser.get().userId),
+                rateLimitProperties == null ? 0L : rateLimitProperties.getFileUpload().getLimit(),
+                rateLimitProperties == null ? 0L : rateLimitProperties.getFileUpload().getWindowSeconds())) {
+            writeJson(ctx, "{\"code\":429,\"msg\":\"too many requests\"}", HttpResponseStatus.TOO_MANY_REQUESTS);
             return;
         }
 
@@ -232,6 +265,12 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
             writeJson(ctx, "{\"code\":401,\"msg\":\"unauthorized\"}", HttpResponseStatus.UNAUTHORIZED);
             return;
         }
+        if (!consumeRateLimit("file_download", "userId", String.valueOf(authUser.get().userId),
+                rateLimitProperties == null ? 0L : rateLimitProperties.getFileDownload().getLimit(),
+                rateLimitProperties == null ? 0L : rateLimitProperties.getFileDownload().getWindowSeconds())) {
+            writeJson(ctx, "{\"code\":429,\"msg\":\"too many requests\"}", HttpResponseStatus.TOO_MANY_REQUESTS);
+            return;
+        }
         try {
             JsonNode body = mapper.readTree(req.content().toString(StandardCharsets.UTF_8));
             String fileId = body == null ? null : body.path("fileId").asText(null);
@@ -270,6 +309,13 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
 
         final StoredFileResource resource;
         try {
+            String remoteIp = resolveRemoteIp(ctx, req);
+            if (!consumeRateLimit("file_download", "ip", remoteIp,
+                    rateLimitProperties == null ? 0L : rateLimitProperties.getFileDownload().getLimit(),
+                    rateLimitProperties == null ? 0L : rateLimitProperties.getFileDownload().getWindowSeconds())) {
+                writePlain(ctx, HttpResponseStatus.TOO_MANY_REQUESTS, "too many requests", "text/plain; charset=UTF-8");
+                return;
+            }
             long expireAt = expRaw == null ? -1L : Long.parseLong(expRaw);
             resource = fileService.loadBySignedDownloadUrl(fileId, expireAt, signature);
         } catch (FileAccessDeniedException ex) {
@@ -370,5 +416,26 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
             return null;
         }
         return values.get(0);
+    }
+
+    private boolean consumeRateLimit(String scope, String dimension, String subject, long limit, long windowSeconds) {
+        if (rateLimitService == null || subject == null || subject.isBlank()) {
+            return true;
+        }
+        return rateLimitService.checkAndIncrement(scope, dimension, subject, limit, windowSeconds).allowed();
+    }
+
+    private String resolveRemoteIp(ChannelHandlerContext ctx, FullHttpRequest req) {
+        String remoteIp = req.headers().get("X-Real-IP");
+        if (remoteIp == null) {
+            String xff = req.headers().get("X-Forwarded-For");
+            if (xff != null) {
+                remoteIp = xff.split(",")[0].trim();
+            }
+        }
+        if (remoteIp == null && ctx.channel().remoteAddress() != null) {
+            remoteIp = ctx.channel().remoteAddress().toString();
+        }
+        return remoteIp == null ? "unknown" : remoteIp;
     }
 }

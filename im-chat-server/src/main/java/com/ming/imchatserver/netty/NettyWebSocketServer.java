@@ -2,6 +2,8 @@ package com.ming.imchatserver.netty;
 
 import com.ming.imchatserver.config.FileStorageProperties;
 import com.ming.imchatserver.config.NettyProperties;
+import com.ming.imchatserver.config.RateLimitProperties;
+import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.service.AuthService;
@@ -9,6 +11,8 @@ import com.ming.imchatserver.service.ContactService;
 import com.ming.imchatserver.service.FileService;
 import com.ming.imchatserver.service.GroupMessageService;
 import com.ming.imchatserver.service.GroupService;
+import com.ming.imchatserver.service.IdempotencyService;
+import com.ming.imchatserver.service.RateLimitService;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.EventLoopGroup;
@@ -48,6 +52,10 @@ public class NettyWebSocketServer {
     private final FileStorageProperties fileStorageProperties;
     private final Executor groupPushExecutor;
     private final GroupPushCoordinator groupPushCoordinator;
+    private final IdempotencyService idempotencyService;
+    private final RateLimitService rateLimitService;
+    private final RateLimitProperties rateLimitProperties;
+    private final RedisStateProperties redisStateProperties;
 
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
@@ -74,7 +82,11 @@ public class NettyWebSocketServer {
                                 FileService fileService,
                                 FileStorageProperties fileStorageProperties,
                                 @Qualifier("groupPushExecutor") Executor groupPushExecutor,
-                                GroupPushCoordinator groupPushCoordinator) {
+                                GroupPushCoordinator groupPushCoordinator,
+                                IdempotencyService idempotencyService,
+                                RateLimitService rateLimitService,
+                                RateLimitProperties rateLimitProperties,
+                                RedisStateProperties redisStateProperties) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
@@ -88,6 +100,10 @@ public class NettyWebSocketServer {
         this.fileStorageProperties = fileStorageProperties;
         this.groupPushExecutor = groupPushExecutor;
         this.groupPushCoordinator = groupPushCoordinator;
+        this.idempotencyService = idempotencyService;
+        this.rateLimitService = rateLimitService;
+        this.rateLimitProperties = rateLimitProperties;
+        this.redisStateProperties = redisStateProperties;
     }
 
     @EventListener(ApplicationReadyEvent.class)    /**
@@ -103,7 +119,7 @@ public class NettyWebSocketServer {
         b.group(bossGroup, workerGroup)
                 .channel(NioServerSocketChannel.class)
                 .localAddress(new InetSocketAddress(properties.getPort()))
-                .childHandler(new NettyServerInitializer(properties, authService, channelUserManager, messageService, contactService, groupService, groupMessageService, deliveryMapper, metricsService, fileService, fileStorageProperties, groupPushExecutor, groupPushCoordinator));
+                .childHandler(new NettyServerInitializer(properties, authService, channelUserManager, messageService, contactService, groupService, groupMessageService, deliveryMapper, metricsService, fileService, fileStorageProperties, groupPushExecutor, groupPushCoordinator, idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties));
         serverChannel = b.bind().sync().channel();
         logger.info("Netty server started and listening on {}", properties.getPort());
     }

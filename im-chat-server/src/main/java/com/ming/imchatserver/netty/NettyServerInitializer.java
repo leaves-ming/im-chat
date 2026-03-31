@@ -2,6 +2,8 @@ package com.ming.imchatserver.netty;
 
 import com.ming.imchatserver.config.FileStorageProperties;
 import com.ming.imchatserver.config.NettyProperties;
+import com.ming.imchatserver.config.RateLimitProperties;
+import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.service.AuthService;
@@ -9,6 +11,8 @@ import com.ming.imchatserver.service.ContactService;
 import com.ming.imchatserver.service.FileService;
 import com.ming.imchatserver.service.GroupMessageService;
 import com.ming.imchatserver.service.GroupService;
+import com.ming.imchatserver.service.IdempotencyService;
+import com.ming.imchatserver.service.RateLimitService;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.codec.http.HttpObjectAggregator;
@@ -37,6 +41,10 @@ import java.util.concurrent.Executor;
     private final FileStorageProperties fileStorageProperties;
     private final Executor groupPushExecutor;
     private final GroupPushCoordinator groupPushCoordinator;
+    private final IdempotencyService idempotencyService;
+    private final RateLimitService rateLimitService;
+    private final RateLimitProperties rateLimitProperties;
+    private final RedisStateProperties redisStateProperties;
     /**
      * 创建 Channel 初始化器，并注入各业务 Handler 所需依赖。
      */
@@ -53,7 +61,11 @@ import java.util.concurrent.Executor;
                                   FileService fileService,
                                   FileStorageProperties fileStorageProperties,
                                   Executor groupPushExecutor,
-                                  GroupPushCoordinator groupPushCoordinator) {
+                                  GroupPushCoordinator groupPushCoordinator,
+                                  IdempotencyService idempotencyService,
+                                  RateLimitService rateLimitService,
+                                  RateLimitProperties rateLimitProperties,
+                                  RedisStateProperties redisStateProperties) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
@@ -67,6 +79,10 @@ import java.util.concurrent.Executor;
         this.fileStorageProperties = fileStorageProperties;
         this.groupPushExecutor = groupPushExecutor;
         this.groupPushCoordinator = groupPushCoordinator;
+        this.idempotencyService = idempotencyService;
+        this.rateLimitService = rateLimitService;
+        this.rateLimitProperties = rateLimitProperties;
+        this.redisStateProperties = redisStateProperties;
     }
 
     @Override
@@ -86,14 +102,14 @@ import java.util.concurrent.Executor;
         ch.pipeline().addLast(new ChunkedWriteHandler());
 
         // 先处理 REST 请求（如 /api/auth/login），非 REST 请求交由后续处理
-        ch.pipeline().addLast(new HttpRequestHandler(properties, authService, metricsService, fileService, fileStorageProperties));
+        ch.pipeline().addLast(new HttpRequestHandler(properties, authService, metricsService, fileService, fileStorageProperties, rateLimitService, rateLimitProperties));
 
         // 握手认证必须在 WebSocketServerProtocolHandler 之前完成
         ch.pipeline().addLast(new WebSocketHandshakeAuthHandler(properties, authService, channelUserManager));
         ch.pipeline().addLast(new WebSocketServerProtocolHandler(properties.getWebsocketPath(), null, true, properties.getMaxContentLength()));
         // 业务帧鉴权（要求 channel 已绑定 userId）
         ch.pipeline().addLast(new WsBusinessAuthHandler(channelUserManager));
-        ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, properties, deliveryMapper, metricsService, groupPushExecutor, groupPushCoordinator));
+        ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, properties, deliveryMapper, metricsService, groupPushExecutor, groupPushCoordinator, idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties));
         ch.pipeline().addLast(new IdleEventHandler(channelUserManager));
     }
 }

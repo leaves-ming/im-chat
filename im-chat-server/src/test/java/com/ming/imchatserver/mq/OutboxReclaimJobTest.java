@@ -26,7 +26,7 @@ class OutboxReclaimJobTest {
         properties.setProcessingTimeoutMs(30_000L);
         when(outboxMapper.reclaimTimeoutProcessing(any(Date.class), any(Date.class))).thenReturn(2);
 
-        OutboxReclaimJob job = new OutboxReclaimJob(outboxMapper, properties);
+        OutboxReclaimJob job = new OutboxReclaimJob(outboxMapper, properties, null);
         job.reclaimTimeoutProcessing();
 
         verify(outboxMapper).reclaimTimeoutProcessing(any(Date.class), any(Date.class));
@@ -39,7 +39,7 @@ class OutboxReclaimJobTest {
         properties.setProcessingTimeoutMs(30_000L);
         when(outboxMapper.reclaimTimeoutProcessing(any(Date.class), any(Date.class))).thenReturn(0);
 
-        OutboxReclaimJob job = new OutboxReclaimJob(outboxMapper, properties);
+        OutboxReclaimJob job = new OutboxReclaimJob(outboxMapper, properties, null);
         job.reclaimTimeoutProcessing();
 
         verify(outboxMapper).reclaimTimeoutProcessing(any(Date.class), any(Date.class));

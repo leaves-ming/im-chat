@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ming.imchatserver.config.NettyProperties;
+import com.ming.imchatserver.config.RateLimitProperties;
+import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imchatserver.dao.ContactDO;
 import com.ming.imchatserver.dao.GroupMemberDO;
 import com.ming.imchatserver.dao.GroupMessageDO;
@@ -20,7 +22,9 @@ import com.ming.imchatserver.service.FileTokenBizException;
 import com.ming.imchatserver.service.GroupBizException;
 import com.ming.imchatserver.service.GroupMessageService;
 import com.ming.imchatserver.service.GroupService;
+import com.ming.imchatserver.service.IdempotencyService;
 import com.ming.imchatserver.service.MessageService;
+import com.ming.imchatserver.service.RateLimitService;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
@@ -68,6 +72,10 @@ import java.util.concurrent.RejectedExecutionException;
     private final MetricsService metricsService;
     private final Executor groupPushExecutor;
     private final GroupPushCoordinator groupPushCoordinator;
+    private final IdempotencyService idempotencyService;
+    private final RateLimitService rateLimitService;
+    private final RateLimitProperties rateLimitProperties;
+    private final RedisStateProperties redisStateProperties;
     /**
      * @param channelUserManager 在线连接管理器
      * @param messageService     消息服务（落库、状态更新、分页拉取）
@@ -83,7 +91,7 @@ import java.util.concurrent.RejectedExecutionException;
                                  NettyProperties nettyProperties,
                                  DeliveryMapper deliveryMapper,
                                  MetricsService metricsService) {
-        this(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService, null, null);
+        this(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService, null, null, null, null, null, null);
     }
 
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
@@ -95,7 +103,37 @@ import java.util.concurrent.RejectedExecutionException;
                                  DeliveryMapper deliveryMapper,
                                  MetricsService metricsService,
                                  Executor groupPushExecutor) {
-        this(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService, groupPushExecutor, null);
+        this(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService, groupPushExecutor, null, null, null, null, null);
+    }
+
+    public WebSocketFrameHandler(ChannelUserManager channelUserManager,
+                                 MessageService messageService,
+                                 ContactService contactService,
+                                 GroupService groupService,
+                                 GroupMessageService groupMessageService,
+                                 NettyProperties nettyProperties,
+                                 DeliveryMapper deliveryMapper,
+                                 MetricsService metricsService,
+                                 Executor groupPushExecutor,
+                                 GroupPushCoordinator groupPushCoordinator,
+                                 IdempotencyService idempotencyService,
+                                 RateLimitService rateLimitService,
+                                 RateLimitProperties rateLimitProperties,
+                                 RedisStateProperties redisStateProperties) {
+        this.channelUserManager = channelUserManager;
+        this.messageService = messageService;
+        this.contactService = contactService;
+        this.groupService = groupService;
+        this.groupMessageService = groupMessageService;
+        this.nettyProperties = nettyProperties;
+        this.deliveryMapper = deliveryMapper;
+        this.metricsService = metricsService;
+        this.groupPushExecutor = groupPushExecutor;
+        this.groupPushCoordinator = groupPushCoordinator;
+        this.idempotencyService = idempotencyService;
+        this.rateLimitService = rateLimitService;
+        this.rateLimitProperties = rateLimitProperties;
+        this.redisStateProperties = redisStateProperties;
     }
 
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
@@ -108,16 +146,9 @@ import java.util.concurrent.RejectedExecutionException;
                                  MetricsService metricsService,
                                  Executor groupPushExecutor,
                                  GroupPushCoordinator groupPushCoordinator) {
-        this.channelUserManager = channelUserManager;
-        this.messageService = messageService;
-        this.contactService = contactService;
-        this.groupService = groupService;
-        this.groupMessageService = groupMessageService;
-        this.nettyProperties = nettyProperties;
-        this.deliveryMapper = deliveryMapper;
-        this.metricsService = metricsService;
-        this.groupPushExecutor = groupPushExecutor;
-        this.groupPushCoordinator = groupPushCoordinator;
+        this(channelUserManager, messageService, contactService, groupService, groupMessageService,
+                nettyProperties, deliveryMapper, metricsService, groupPushExecutor, groupPushCoordinator,
+                null, null, null, null);
     }
 
     /**
@@ -127,7 +158,7 @@ import java.util.concurrent.RejectedExecutionException;
                                  MessageService messageService,
                                  NettyProperties nettyProperties,
                                  DeliveryMapper deliveryMapper) {
-        this(channelUserManager, messageService, null, null, null, nettyProperties, deliveryMapper, null, null, null);
+        this(channelUserManager, messageService, null, null, null, nettyProperties, deliveryMapper, null, null, null, null, null, null, null);
     }
 
     @Override
@@ -204,10 +235,12 @@ import java.util.concurrent.RejectedExecutionException;
     protected void channelRead0(ChannelHandlerContext ctx, WebSocketFrame frame) throws Exception {
         Channel ch = ctx.channel();
         if (frame instanceof TextWebSocketFrame text) {
+            channelUserManager.refreshHeartbeat(ch);
             processTextFrame(ch, text.text());
             return;
         }
         if (frame instanceof PingWebSocketFrame) {
+            channelUserManager.refreshHeartbeat(ch);
             ctx.writeAndFlush(new PongWebSocketFrame(frame.content().retain()));
             return;
         }
@@ -490,6 +523,14 @@ import java.util.concurrent.RejectedExecutionException;
         }
 
         String clientMsgId = normalizeClientMsgId(node.path("clientMsgId").asText(null));
+        if (!consumeMessageRateLimit(fromUserId)) {
+            sendError(ch, "RATE_LIMITED", "message send rate exceeded");
+            return;
+        }
+        if (!claimClientMessageId(fromUserId, clientMsgId)) {
+            sendError(ch, "DUPLICATE_REQUEST", "clientMsgId replay detected");
+            return;
+        }
         GroupMessageService.PersistResult persistResult = groupMessageService.persistMessage(groupId, fromUserId, clientMsgId, msgType, content);
         GroupMessageDO message = persistResult.getMessage();
 
@@ -589,6 +630,14 @@ import java.util.concurrent.RejectedExecutionException;
             return;
         }
         String normalizedClientMsgId = normalizeClientMsgId(node.path("clientMsgId").asText(null));
+        if (!consumeMessageRateLimit(fromUserId)) {
+            sendError(ch, "RATE_LIMITED", "message send rate exceeded");
+            return;
+        }
+        if (!claimClientMessageId(fromUserId, normalizedClientMsgId)) {
+            sendError(ch, "DUPLICATE_REQUEST", "clientMsgId replay detected");
+            return;
+        }
         if (nettyProperties.isSingleChatRequireActiveContact() && !isSingleChatAllowedByContact(fromUserId, target)) {
             sendError(ch, "FORBIDDEN", "single chat requires active bilateral contacts");
             return;
@@ -911,6 +960,25 @@ import java.util.concurrent.RejectedExecutionException;
         } catch (Exception ex) {
             logger.error("sendServerAck failed", ex);
         }
+    }
+
+    private boolean consumeMessageRateLimit(Long userId) {
+        if (rateLimitService == null || rateLimitProperties == null || userId == null) {
+            return true;
+        }
+        return rateLimitService.checkAndIncrement(
+                "message_send",
+                "userId",
+                String.valueOf(userId),
+                rateLimitProperties.getMessageSend().getLimit(),
+                rateLimitProperties.getMessageSend().getWindowSeconds()).allowed();
+    }
+
+    private boolean claimClientMessageId(Long userId, String clientMsgId) {
+        if (idempotencyService == null || redisStateProperties == null || clientMsgId == null || clientMsgId.isBlank() || userId == null) {
+            return true;
+        }
+        return idempotencyService.claimClientMessage(userId, clientMsgId, java.time.Duration.ofSeconds(redisStateProperties.getClientMsgIdTtlSeconds()));
     }
 
     /**

@@ -34,6 +34,10 @@ spring:
           max-idle: 8
           min-idle: 1
           max-wait: 3000ms
+redisson:
+  single-server-config:
+    address: redis://127.0.0.1:6379
+    password: 114514
 
 # 若保留 Spring MVC（REST 登录接口），可将 server.port 设为非 0 并把 web-application-type 改为 servlet
 server:
@@ -100,6 +104,23 @@ im:
     download-sign-expire-seconds: 300
     download-sign-one-time: false
     allow-owner-download-without-message: true
+  redis:
+    server-id: ${HOSTNAME:im-chat-server}
+    presence-ttl-seconds: 180
+    client-msg-id-ttl-seconds: 600
+  rate-limit:
+    login-fail:
+      limit: 20
+      window-seconds: 300
+    message-send:
+      limit: 120
+      window-seconds: 60
+    file-upload:
+      limit: 30
+      window-seconds: 60
+    file-download:
+      limit: 60
+      window-seconds: 60
   metrics:
     sample-fixed-delay-ms: 10000
     log-fixed-delay-ms: 60000

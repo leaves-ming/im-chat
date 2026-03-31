@@ -5,6 +5,7 @@ import com.ming.imchatserver.config.ReliabilityProperties;
 import com.ming.imchatserver.dao.OutboxMessageDO;
 import com.ming.imchatserver.mapper.OutboxMapper;
 import com.ming.imchatserver.metrics.MetricsService;
+import com.ming.imchatserver.service.DistributedCoordinationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -12,6 +13,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.Date;
 import java.util.List;
+import java.time.Duration;
 
 /**
  * Outbox relay: 扫描待发送事件并投递到 MQ。
@@ -27,20 +29,39 @@ public class OutboxRelayJob {
     private final DispatchProducer dispatchProducer;
     private final ReliabilityProperties reliabilityProperties;
     private final MetricsService metricsService;
+    private final DistributedCoordinationService distributedCoordinationService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public OutboxRelayJob(OutboxMapper outboxMapper,
                           DispatchProducer dispatchProducer,
                           ReliabilityProperties reliabilityProperties,
-                          MetricsService metricsService) {
+                          MetricsService metricsService,
+                          DistributedCoordinationService distributedCoordinationService) {
         this.outboxMapper = outboxMapper;
         this.dispatchProducer = dispatchProducer;
         this.reliabilityProperties = reliabilityProperties;
         this.metricsService = metricsService;
+        this.distributedCoordinationService = distributedCoordinationService;
     }
 
     @Scheduled(fixedDelayString = "${im.reliability.relay-fixed-delay-ms:1000}")
     public void relay() {
+        if (distributedCoordinationService != null) {
+            boolean executed = distributedCoordinationService.executeIfLeader(
+                    "job",
+                    "outbox_relay",
+                    Duration.ZERO,
+                    Duration.ofSeconds(30),
+                    this::doRelay);
+            if (!executed) {
+                logger.warn("skip outbox relay on this instance because distributed lock was not acquired");
+            }
+            return;
+        }
+        doRelay();
+    }
+
+    private void doRelay() {
         List<OutboxMessageDO> batch = outboxMapper.findReadyBatch(new Date(), reliabilityProperties.getRelayBatchSize());
         if (batch.isEmpty()) {
             return;
