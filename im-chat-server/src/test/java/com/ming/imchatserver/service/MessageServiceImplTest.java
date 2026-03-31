@@ -4,6 +4,7 @@ import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.dao.OutboxMessageDO;
 import com.ming.imchatserver.mapper.MessageMapper;
 import com.ming.imchatserver.mapper.OutboxMapper;
+import com.ming.imchatserver.mapper.SingleCursorMapper;
 import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.sensitive.SensitiveWordFilterResult;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
@@ -17,6 +18,7 @@ import org.mockito.ArgumentCaptor;
 
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.Date;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -228,6 +230,84 @@ class MessageServiceImplTest {
         verify(sensitiveWordService, never()).filter(any());
         assertEquals(MessageContentCodec.MSG_TYPE_FILE, captor.getValue().getMsgType());
         assertEquals(msg.getContent(), captor.getValue().getContent());
+    }
+
+    @Test
+    void pullOfflineFromCheckpointShouldFallbackToRecentWithoutAdvancingCursor() {
+        MessageMapper mapper = mock(MessageMapper.class);
+        SingleCursorMapper singleCursorMapper = mock(SingleCursorMapper.class);
+        MessageServiceImpl service = new MessageServiceImpl(mapper, singleCursorMapper, null, null, null, null, null);
+
+        MessageDO recent = new MessageDO();
+        recent.setId(9L);
+        recent.setServerMsgId("srv-9");
+        recent.setMsgType("TEXT");
+        recent.setContent("\"hello\"");
+        recent.setCreatedAt(new Date());
+        when(singleCursorMapper.findByUserIdAndDeviceId(2L, "ios-1")).thenReturn(null);
+        when(mapper.findRecentByToUserId(2L)).thenReturn(List.of(recent));
+
+        MessageService.CursorPageResult result = service.pullOfflineFromCheckpoint(2L, "ios-1", 2);
+
+        assertEquals(1, result.getMessages().size());
+        assertEquals(9L, result.getNextCursorId());
+        verify(singleCursorMapper, never()).upsertLastPullCursor(any(), any(), any(), any());
+    }
+
+    @Test
+    void pullOfflineFromCheckpointShouldKeepBaseCursorWhenNoNewMessages() {
+        MessageMapper mapper = mock(MessageMapper.class);
+        SingleCursorMapper singleCursorMapper = mock(SingleCursorMapper.class);
+        MessageServiceImpl service = new MessageServiceImpl(mapper, singleCursorMapper, null, null, null, null, null);
+
+        com.ming.imchatserver.dao.SingleCursorDO checkpoint = new com.ming.imchatserver.dao.SingleCursorDO();
+        Date baseTime = new Date();
+        checkpoint.setUserId(2L);
+        checkpoint.setDeviceId("ios-1");
+        checkpoint.setLastPullCreatedAt(baseTime);
+        checkpoint.setLastPullMessageId(15L);
+        when(singleCursorMapper.findByUserIdAndDeviceId(2L, "ios-1")).thenReturn(checkpoint);
+        when(mapper.findByToUserIdAfterCursor(2L, baseTime, 15L)).thenReturn(List.of());
+
+        MessageService.CursorPageResult result = service.pullOfflineFromCheckpoint(2L, "ios-1", 2);
+
+        assertTrue(result.getMessages().isEmpty());
+        assertEquals(baseTime, result.getNextCursorCreatedAt());
+        assertEquals(15L, result.getNextCursorId());
+        verify(singleCursorMapper, never()).upsertLastPullCursor(any(), any(), any(), any());
+    }
+
+    @Test
+    void advanceSyncCursorShouldPersistDeviceLevelCheckpoint() {
+        MessageMapper mapper = mock(MessageMapper.class);
+        SingleCursorMapper singleCursorMapper = mock(SingleCursorMapper.class);
+        MessageServiceImpl service = new MessageServiceImpl(mapper, singleCursorMapper, null, null, null, null, null);
+
+        Date cursorTime = new Date();
+        service.advanceSyncCursor(2L, "ios-1", new MessageService.SyncCursor(cursorTime, 33L));
+
+        verify(singleCursorMapper).upsertLastPullCursor(2L, "ios-1", cursorTime, 33L);
+    }
+
+    @Test
+    void getSyncCursorShouldBeScopedByDeviceId() {
+        MessageMapper mapper = mock(MessageMapper.class);
+        SingleCursorMapper singleCursorMapper = mock(SingleCursorMapper.class);
+        MessageServiceImpl service = new MessageServiceImpl(mapper, singleCursorMapper, null, null, null, null, null);
+
+        com.ming.imchatserver.dao.SingleCursorDO checkpoint = new com.ming.imchatserver.dao.SingleCursorDO();
+        Date baseTime = new Date();
+        checkpoint.setUserId(2L);
+        checkpoint.setDeviceId("ios-1");
+        checkpoint.setLastPullCreatedAt(baseTime);
+        checkpoint.setLastPullMessageId(21L);
+        when(singleCursorMapper.findByUserIdAndDeviceId(2L, "ios-1")).thenReturn(checkpoint);
+
+        MessageService.SyncCursor cursor = service.getSyncCursor(2L, "ios-1");
+
+        assertEquals(baseTime, cursor.getCursorCreatedAt());
+        assertEquals(21L, cursor.getCursorId());
+        verify(singleCursorMapper).findByUserIdAndDeviceId(2L, "ios-1");
     }
 
     @Test

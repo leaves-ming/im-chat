@@ -35,6 +35,7 @@ import io.netty.handler.codec.http.websocketx.PingWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.PongWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
+import io.netty.util.concurrent.Future;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -579,9 +580,8 @@ import java.util.concurrent.RejectedExecutionException;
             sendError(ch, "INVALID_PARAM", "limit must be between 1 and " + maxLimit);
             return;
         }
-        Long cursorSeq = node.has("cursorSeq") && !node.get("cursorSeq").isNull() ? node.get("cursorSeq").asLong() : null;
-        if (cursorSeq != null && cursorSeq < 0L) {
-            sendError(ch, "INVALID_PARAM", "cursorSeq must be greater than or equal to 0");
+        Long cursorSeq = parseGroupCursorSeq(node, groupId, ch);
+        if (Long.valueOf(INVALID_GROUP_CURSOR_SEQ).equals(cursorSeq)) {
             return;
         }
 
@@ -591,7 +591,7 @@ import java.util.concurrent.RejectedExecutionException;
         resp.put("type", "GROUP_PULL_OFFLINE_RESULT");
         resp.put("groupId", groupId);
         resp.put("hasMore", pullResult.isHasMore());
-        resp.put("nextCursorSeq", pullResult.getNextCursorSeq());
+        writeGroupSyncProgress(resp, groupId, pullResult.getNextCursorSeq());
         ArrayNode messages = mapper.createArrayNode();
         for (GroupMessageDO message : pullResult.getMessages()) {
             ObjectNode item = mapper.createObjectNode();
@@ -909,6 +909,7 @@ import java.util.concurrent.RejectedExecutionException;
             sendError(ch, "UNAUTHORIZED", "user not bound");
             return;
         }
+        String deviceId = currentDeviceId(ch);
 
         int limit = node.has("limit") ? node.get("limit").asInt(nettyProperties.getSyncBatchSize()) : nettyProperties.getSyncBatchSize();
         int maxLimit = nettyProperties.getOfflinePullMaxLimit() > 0 ? nettyProperties.getOfflinePullMaxLimit() : DEFAULT_PULL_MAX_LIMIT;
@@ -917,38 +918,20 @@ import java.util.concurrent.RejectedExecutionException;
             return;
         }
 
-        String cursorCreatedAtStr = node.has("cursorCreatedAt") && !node.get("cursorCreatedAt").isNull() ? node.get("cursorCreatedAt").asText() : null;
-        Long cursorId = node.has("cursorId") && !node.get("cursorId").isNull() ? node.get("cursorId").asLong() : null;
-
-        boolean hasCursorCreatedAt = cursorCreatedAtStr != null && !cursorCreatedAtStr.isBlank();
-        boolean hasCursorId = cursorId != null;
-        if (hasCursorCreatedAt != hasCursorId) {
-            sendError(ch, "INVALID_PARAM", "cursorCreatedAt and cursorId must be provided together");
+        MessageService.SyncCursor syncCursor = parseSingleSyncCursor(node, ch, deviceId);
+        if (syncCursor == INVALID_SINGLE_SYNC_CURSOR) {
             return;
         }
 
-        Date cursorCreatedAt = null;
-        if (hasCursorCreatedAt) {
-            try {
-                cursorCreatedAt = Date.from(Instant.parse(cursorCreatedAtStr));
-            } catch (Exception ex) {
-                sendError(ch, "INVALID_PARAM", "cursorCreatedAt must be ISO-8601 instant");
-                return;
-            }
-        }
-
-        MessageService.CursorPageResult pageResult = !hasCursorCreatedAt
-                ? messageService.pullRecent(fromUserId, limit)
-                : messageService.pullOfflineByCursor(fromUserId, cursorCreatedAt, cursorId, limit);
+        MessageService.CursorPageResult pageResult = syncCursor == null
+                ? messageService.pullOfflineFromCheckpoint(fromUserId, deviceId, limit)
+                : messageService.pullOffline(fromUserId, deviceId, syncCursor, limit);
         List<MessageDO> retList = pageResult.getMessages();
 
         ObjectNode resp = mapper.createObjectNode();
         resp.put("type", "PULL_OFFLINE_RESULT");
         resp.put("hasMore", pageResult.isHasMore());
-        if (pageResult.getNextCursorCreatedAt() != null && pageResult.getNextCursorId() != null) {
-            resp.put("nextCursorCreatedAt", formatAsInstant(pageResult.getNextCursorCreatedAt()));
-            resp.put("nextCursorId", pageResult.getNextCursorId());
-        }
+        writeSingleSyncProgress(resp, deviceId, pageResult);
 
         ArrayNode arr = mapper.createArrayNode();
         for (MessageDO m : retList) {
@@ -957,7 +940,7 @@ import java.util.concurrent.RejectedExecutionException;
             arr.add(item);
         }
         resp.set("messages", arr);
-        ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(resp)));
+        writeSingleSyncResponse(ch, fromUserId, deviceId, pageResult, resp);
     }
 
     /**
@@ -979,6 +962,174 @@ import java.util.concurrent.RejectedExecutionException;
             return null;
         }
         return date.toInstant().toString();
+    }
+
+    private static final MessageService.SyncCursor INVALID_SINGLE_SYNC_CURSOR = new MessageService.SyncCursor(null, -1L);
+    private static final long INVALID_GROUP_CURSOR_SEQ = Long.MIN_VALUE;
+
+    private MessageService.SyncCursor parseSingleSyncCursor(JsonNode node, Channel ch, String currentDeviceId) {
+        JsonNode syncToken = node.get("syncToken");
+        String cursorCreatedAtStr;
+        Long cursorId;
+        if (syncToken != null && !syncToken.isNull()) {
+            if (!syncToken.isObject()) {
+                sendError(ch, "INVALID_PARAM", "syncToken must be an object");
+                return INVALID_SINGLE_SYNC_CURSOR;
+            }
+            String chatType = textValue(syncToken.get("chatType"));
+            if (chatType != null && !"SINGLE".equalsIgnoreCase(chatType)) {
+                sendError(ch, "INVALID_PARAM", "syncToken.chatType must be SINGLE");
+                return INVALID_SINGLE_SYNC_CURSOR;
+            }
+            String tokenDeviceId = textValue(syncToken.get("deviceId"));
+            if (tokenDeviceId != null && currentDeviceId != null && !tokenDeviceId.equals(currentDeviceId)) {
+                sendError(ch, "INVALID_PARAM", "syncToken.deviceId must match current device");
+                return INVALID_SINGLE_SYNC_CURSOR;
+            }
+            cursorCreatedAtStr = textValue(syncToken.get("cursorCreatedAt"));
+            cursorId = longValue(syncToken.get("cursorId"));
+        } else {
+            cursorCreatedAtStr = textValue(node.get("cursorCreatedAt"));
+            cursorId = longValue(node.get("cursorId"));
+        }
+
+        boolean hasCursorCreatedAt = cursorCreatedAtStr != null && !cursorCreatedAtStr.isBlank();
+        boolean hasCursorId = cursorId != null;
+        if (!hasCursorCreatedAt && Long.valueOf(0L).equals(cursorId)) {
+            return null;
+        }
+        if (hasCursorCreatedAt != hasCursorId) {
+            sendError(ch, "INVALID_PARAM", "cursorCreatedAt and cursorId must be provided together");
+            return INVALID_SINGLE_SYNC_CURSOR;
+        }
+        if (!hasCursorCreatedAt) {
+            return null;
+        }
+        try {
+            return new MessageService.SyncCursor(Date.from(Instant.parse(cursorCreatedAtStr)), cursorId);
+        } catch (Exception ex) {
+            sendError(ch, "INVALID_PARAM", "cursorCreatedAt must be ISO-8601 instant");
+            return INVALID_SINGLE_SYNC_CURSOR;
+        }
+    }
+
+    private Long parseGroupCursorSeq(JsonNode node, Long groupId, Channel ch) {
+        JsonNode syncToken = node.get("syncToken");
+        Long cursorSeq;
+        if (syncToken != null && !syncToken.isNull()) {
+            if (!syncToken.isObject()) {
+                sendError(ch, "INVALID_PARAM", "syncToken must be an object");
+                return INVALID_GROUP_CURSOR_SEQ;
+            }
+            String chatType = textValue(syncToken.get("chatType"));
+            if (chatType != null && !"GROUP".equalsIgnoreCase(chatType)) {
+                sendError(ch, "INVALID_PARAM", "syncToken.chatType must be GROUP");
+                return INVALID_GROUP_CURSOR_SEQ;
+            }
+            Long tokenGroupId = longValue(syncToken.get("groupId"));
+            if (tokenGroupId != null && !tokenGroupId.equals(groupId)) {
+                sendError(ch, "INVALID_PARAM", "syncToken.groupId must match groupId");
+                return INVALID_GROUP_CURSOR_SEQ;
+            }
+            cursorSeq = longValue(syncToken.get("cursorSeq"));
+        } else {
+            cursorSeq = longValue(node.get("cursorSeq"));
+        }
+        if (cursorSeq != null && cursorSeq < 0L) {
+            sendError(ch, "INVALID_PARAM", "cursorSeq must be greater than or equal to 0");
+            return INVALID_GROUP_CURSOR_SEQ;
+        }
+        return cursorSeq;
+    }
+
+    private String textValue(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        String value = node.asText();
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    private Long longValue(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        return node.asLong();
+    }
+
+    private void writeSingleSyncProgress(ObjectNode target, String deviceId, MessageService.CursorPageResult pageResult) {
+        if (pageResult.getNextCursorCreatedAt() == null) {
+            target.putNull("nextCursorCreatedAt");
+        } else {
+            target.put("nextCursorCreatedAt", formatAsInstant(pageResult.getNextCursorCreatedAt()));
+        }
+        if (pageResult.getNextCursorId() == null) {
+            target.putNull("nextCursorId");
+        } else {
+            target.put("nextCursorId", pageResult.getNextCursorId());
+        }
+        target.set("nextSyncToken", buildSingleSyncToken(deviceId, pageResult.getNextCursorCreatedAt(), pageResult.getNextCursorId()));
+    }
+
+    private void writeGroupSyncProgress(ObjectNode target, Long groupId, Long nextCursorSeq) {
+        if (nextCursorSeq == null) {
+            return;
+        }
+        target.put("nextCursorSeq", nextCursorSeq);
+        target.set("nextSyncToken", buildGroupSyncToken(groupId, nextCursorSeq));
+    }
+
+    private ObjectNode buildSingleSyncToken(String deviceId, Date cursorCreatedAt, Long cursorId) {
+        ObjectNode token = mapper.createObjectNode();
+        token.put("chatType", "SINGLE");
+        token.put("deviceId", deviceId == null ? "default" : deviceId);
+        if (cursorCreatedAt == null) {
+            token.putNull("cursorCreatedAt");
+        } else {
+            token.put("cursorCreatedAt", formatAsInstant(cursorCreatedAt));
+        }
+        token.put("cursorId", cursorId == null ? 0L : cursorId);
+        return token;
+    }
+
+    private ObjectNode buildGroupSyncToken(Long groupId, Long cursorSeq) {
+        if (groupId == null || cursorSeq == null) {
+            return null;
+        }
+        ObjectNode token = mapper.createObjectNode();
+        token.put("chatType", "GROUP");
+        token.put("groupId", groupId);
+        token.put("cursorSeq", cursorSeq);
+        return token;
+    }
+
+    private void writeSingleSyncResponse(Channel ch,
+                                         Long userId,
+                                         String deviceId,
+                                         MessageService.CursorPageResult pageResult,
+                                         ObjectNode payload) throws Exception {
+        TextWebSocketFrame frame = new TextWebSocketFrame(mapper.writeValueAsString(payload));
+        ch.writeAndFlush(frame).addListener(future -> advanceSingleSyncCursorOnSuccess(userId, deviceId, pageResult, future));
+    }
+
+    private void advanceSingleSyncCursorOnSuccess(Long userId,
+                                                  String deviceId,
+                                                  MessageService.CursorPageResult pageResult,
+                                                  Future<? super Void> future) {
+        if (!future.isSuccess() || messageService == null || pageResult == null) {
+            return;
+        }
+        Date cursorCreatedAt = pageResult.getNextCursorCreatedAt();
+        Long cursorId = pageResult.getNextCursorId();
+        if (cursorCreatedAt == null || cursorId == null) {
+            return;
+        }
+        messageService.advanceSyncCursor(userId, deviceId, new MessageService.SyncCursor(cursorCreatedAt, cursorId));
+    }
+
+    private String currentDeviceId(Channel channel) {
+        String deviceId = channel == null ? null : channel.attr(NettyAttr.DEVICE_ID).get();
+        return deviceId == null || deviceId.isBlank() ? "default" : deviceId;
     }
 
     /**
@@ -1175,7 +1326,8 @@ import java.util.concurrent.RejectedExecutionException;
         ctx.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(start)));
 
         int batch = nettyProperties.getSyncBatchSize();
-        MessageService.CursorPageResult pageResult = messageService.pullRecent(userId, batch);
+        String deviceId = currentDeviceId(ctx.channel());
+        MessageService.CursorPageResult pageResult = messageService.pullOfflineFromCheckpoint(userId, deviceId, batch);
         List<MessageDO> list = pageResult.getMessages();
 
         ObjectNode batchNode = mapper.createObjectNode();
@@ -1187,12 +1339,22 @@ import java.util.concurrent.RejectedExecutionException;
             arr.add(mi);
         }
         batchNode.set("messages", arr);
-        ctx.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(batchNode)));
+        TextWebSocketFrame batchFrame = new TextWebSocketFrame(mapper.writeValueAsString(batchNode));
 
         ObjectNode end = mapper.createObjectNode();
         end.put("type", "SYNC_END");
         end.put("hasMore", pageResult.isHasMore());
-        ctx.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(end)));
+        writeSingleSyncProgress(end, deviceId, pageResult);
+        ctx.writeAndFlush(batchFrame).addListener(batchFuture -> {
+            if (!batchFuture.isSuccess()) {
+                return;
+            }
+            try {
+                writeSingleSyncResponse(ctx.channel(), userId, deviceId, pageResult, end);
+            } catch (Exception ex) {
+                logger.error("write sync end failed", ex);
+            }
+        });
     }
 
     @Override

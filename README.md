@@ -31,6 +31,7 @@ im/
 - `POST /api/auth/login` 登录，校验用户名密码并签发 JWT。
 - WebSocket 握手鉴权
 - 支持从 `Authorization: Bearer <token>`、query `token`、`Sec-WebSocket-Protocol` 提取 token。
+- 单聊离线同步按 `userId + X-Device-Id` 维度维护 checkpoint，不同设备互不覆盖。
 - 在线连接管理
 - 基于 `ChannelUserManager` 维护 `userId <-> Channel` 双向映射，支持一人多端。
 - 单聊消息主链路
@@ -121,10 +122,17 @@ im/
 {
   "type": "PULL_OFFLINE",
   "limit": 50,
-  "cursorCreatedAt": "2026-03-25T12:00:00Z",
-  "cursorId": 12345
+  "syncToken": {
+    "chatType": "SINGLE",
+    "deviceId": "ios-iphone-15",
+    "cursorCreatedAt": "2026-03-25T12:00:00Z",
+    "cursorId": 12345
+  }
 }
 ```
+
+握手时建议传 `X-Device-Id`，单聊服务端 checkpoint 以 `userId + deviceId` 为维度。
+兼容旧客户端时，单聊仍可继续传 `cursorCreatedAt/cursorId`，群聊仍可继续传 `cursorSeq`；服务端响应会同时返回旧字段与统一的 `nextSyncToken`。
 
 `CONTACT_ADD`
 ```json
@@ -198,8 +206,31 @@ im/
 {
   "type": "PULL_OFFLINE_RESULT",
   "hasMore": false,
+  "nextSyncToken": {
+    "chatType": "SINGLE",
+    "deviceId": "ios-iphone-15",
+    "cursorCreatedAt": "2026-03-25T12:00:10Z",
+    "cursorId": 23456
+  },
   "nextCursorCreatedAt": "2026-03-25T12:00:10Z",
   "nextCursorId": 23456,
+  "messages": []
+}
+```
+
+首次无 checkpoint 且当前也无新消息时，单聊会返回可复用的初始化 token：
+```json
+{
+  "type": "PULL_OFFLINE_RESULT",
+  "hasMore": false,
+  "nextSyncToken": {
+    "chatType": "SINGLE",
+    "deviceId": "ios-iphone-15",
+    "cursorCreatedAt": null,
+    "cursorId": 0
+  },
+  "nextCursorCreatedAt": null,
+  "nextCursorId": 0,
   "messages": []
 }
 ```

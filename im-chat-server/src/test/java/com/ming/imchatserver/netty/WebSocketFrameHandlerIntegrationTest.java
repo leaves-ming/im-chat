@@ -20,10 +20,13 @@ import com.ming.imchatserver.service.IdempotencyService;
 import com.ming.imchatserver.service.MessageService;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelId;
+import io.netty.channel.ChannelOutboundHandlerAdapter;
+import io.netty.channel.ChannelPromise;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.http.DefaultHttpHeaders;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
+import io.netty.util.ReferenceCountUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -169,7 +172,7 @@ class WebSocketFrameHandlerIntegrationTest {
         MessageDO m2 = msg(2L, "s2", Date.from(base), "c2");
         MessageDO m3 = msg(3L, "s3", Date.from(base.plusSeconds(1)), "c3");
 
-        when(messageService.pullRecent(2L, 2)).thenReturn(pageResult(List.of(m1, m2), true));
+        when(messageService.pullOfflineFromCheckpoint(2L, "default", 2)).thenReturn(pageResult(List.of(m1, m2), true));
 
         String req1 = "{\"type\":\"PULL_OFFLINE\",\"limit\":2}";
         channel.writeInbound(new TextWebSocketFrame(req1));
@@ -180,10 +183,12 @@ class WebSocketFrameHandlerIntegrationTest {
         assertEquals(2, resp1.get("messages").size());
         assertEquals("s1", resp1.get("messages").get(0).get("serverMsgId").asText());
         assertEquals("s2", resp1.get("messages").get(1).get("serverMsgId").asText());
+        assertEquals("SINGLE", resp1.get("nextSyncToken").get("chatType").asText());
+        verify(messageService).advanceSyncCursor(eq(2L), eq("default"), any(MessageService.SyncCursor.class));
 
         String cursorCreatedAt = resp1.get("nextCursorCreatedAt").asText();
         long cursorId = resp1.get("nextCursorId").asLong();
-        when(messageService.pullOfflineByCursor(eq(2L), any(Date.class), eq(cursorId), eq(2))).thenReturn(pageResult(List.of(m3), false));
+        when(messageService.pullOffline(eq(2L), eq("default"), any(MessageService.SyncCursor.class), eq(2))).thenReturn(pageResult(List.of(m3), false));
 
         String req2 = "{\"type\":\"PULL_OFFLINE\",\"limit\":2,\"cursorCreatedAt\":\"" + cursorCreatedAt + "\",\"cursorId\":" + cursorId + "}";
         channel.writeInbound(new TextWebSocketFrame(req2));
@@ -193,6 +198,7 @@ class WebSocketFrameHandlerIntegrationTest {
         assertFalse(resp2.get("hasMore").asBoolean());
         assertEquals(1, resp2.get("messages").size());
         assertEquals("s3", resp2.get("messages").get(0).get("serverMsgId").asText());
+        assertEquals(3L, resp2.get("nextSyncToken").get("cursorId").asLong());
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"PULL_OFFLINE\",\"limit\":0}"));
         JsonNode invalidLimit = readOutboundJson(channel).get(0);
@@ -209,6 +215,103 @@ class WebSocketFrameHandlerIntegrationTest {
     }
 
     @Test
+    void pullOfflineShouldReturnNextSyncTokenOnEmptyPageAndAdvanceOnlyAfterSuccessfulWrite() throws Exception {
+        EmbeddedChannel channel = new EmbeddedChannel(
+                new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null)
+        );
+        channel.attr(NettyAttr.USER_ID).set(2L);
+
+        Date baseCursorTime = Date.from(Instant.parse("2026-03-25T00:00:00Z"));
+        when(messageService.pullOffline(eq(2L), eq("default"), any(MessageService.SyncCursor.class), eq(2)))
+                .thenReturn(new MessageService.CursorPageResult(List.of(), false, baseCursorTime, 99L));
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"PULL_OFFLINE\",\"limit\":2,\"cursorCreatedAt\":\"2026-03-25T00:00:00Z\",\"cursorId\":99}"));
+        JsonNode resp = readOutboundJson(channel).get(0);
+
+        assertTrue(resp.get("messages").isEmpty());
+        assertEquals("default", resp.get("nextSyncToken").get("deviceId").asText());
+        assertEquals(99L, resp.get("nextSyncToken").get("cursorId").asLong());
+        verify(messageService).advanceSyncCursor(eq(2L), eq("default"), any(MessageService.SyncCursor.class));
+    }
+
+    @Test
+    void pullOfflineShouldReturnReusableInitSyncTokenWhenNoCheckpointAndNoMessages() throws Exception {
+        EmbeddedChannel channel = new EmbeddedChannel(
+                new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null)
+        );
+        channel.attr(NettyAttr.USER_ID).set(2L);
+
+        when(messageService.pullOfflineFromCheckpoint(2L, "default", 2))
+                .thenReturn(new MessageService.CursorPageResult(List.of(), false, null, 0L));
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"PULL_OFFLINE\",\"limit\":2}"));
+        JsonNode resp = readOutboundJson(channel).get(0);
+
+        assertTrue(resp.get("messages").isEmpty());
+        assertTrue(resp.get("nextCursorCreatedAt").isNull());
+        assertEquals(0L, resp.get("nextCursorId").asLong());
+        assertEquals("default", resp.get("nextSyncToken").get("deviceId").asText());
+        assertEquals(0L, resp.get("nextSyncToken").get("cursorId").asLong());
+        verify(messageService, never()).advanceSyncCursor(eq(2L), eq("default"), any(MessageService.SyncCursor.class));
+    }
+
+    @Test
+    void pullOfflineShouldNotAdvanceCheckpointWhenWriteFails() {
+        EmbeddedChannel channel = new EmbeddedChannel(
+                new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null),
+                new ChannelOutboundHandlerAdapter() {
+                    @Override
+                    public void write(io.netty.channel.ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
+                        ReferenceCountUtil.release(msg);
+                        promise.setFailure(new RuntimeException("write failed"));
+                    }
+                }
+        );
+        channel.attr(NettyAttr.USER_ID).set(2L);
+
+        Date baseCursorTime = Date.from(Instant.parse("2026-03-25T00:00:00Z"));
+        when(messageService.pullOfflineFromCheckpoint(2L, "default", 2))
+                .thenReturn(new MessageService.CursorPageResult(List.of(), false, baseCursorTime, 99L));
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"PULL_OFFLINE\",\"limit\":2}"));
+
+        verify(messageService, never()).advanceSyncCursor(eq(2L), eq("default"), any(MessageService.SyncCursor.class));
+    }
+
+    @Test
+    void reconnectSyncShouldNotAdvanceCheckpointWhenBatchWriteFails() {
+        AtomicInteger writeCount = new AtomicInteger();
+        EmbeddedChannel channel = new EmbeddedChannel(
+                new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null),
+                new ChannelOutboundHandlerAdapter() {
+                    @Override
+                    public void write(io.netty.channel.ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
+                        int current = writeCount.incrementAndGet();
+                        if (current == 2) {
+                            ReferenceCountUtil.release(msg);
+                            promise.setFailure(new RuntimeException("sync batch failed"));
+                            return;
+                        }
+                        ctx.write(msg, promise);
+                    }
+                }
+        );
+        channel.attr(NettyAttr.USER_ID).set(100L);
+        channel.attr(NettyAttr.AUTH_OK).set(Boolean.TRUE);
+        channel.attr(NettyAttr.DEVICE_ID).set("ios-1");
+
+        when(messageService.pullOfflineFromCheckpoint(100L, "ios-1", 2))
+                .thenReturn(pageResult(List.of(), false));
+
+        WebSocketServerProtocolHandler.HandshakeComplete handshake =
+                new WebSocketServerProtocolHandler.HandshakeComplete("/ws", new DefaultHttpHeaders(), null);
+
+        channel.pipeline().fireUserEventTriggered(handshake);
+
+        verify(messageService, never()).advanceSyncCursor(eq(100L), eq("ios-1"), any(MessageService.SyncCursor.class));
+    }
+
+    @Test
     void pullOfflineShouldReturnStructuredFileMessage() throws Exception {
         EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
         channel.attr(NettyAttr.USER_ID).set(2L);
@@ -216,7 +319,7 @@ class WebSocketFrameHandlerIntegrationTest {
         MessageDO fileMessage = msg(10L, "sf-1", Date.from(Instant.parse("2026-03-25T00:00:00Z")), "cf-1");
         fileMessage.setMsgType("FILE");
         fileMessage.setContent("{\"fileId\":\"f10\",\"fileName\":\"spec.pdf\",\"size\":256,\"contentType\":\"application/pdf\",\"url\":\"/files/f10/spec.pdf\"}");
-        when(messageService.pullRecent(2L, 1)).thenReturn(pageResult(List.of(fileMessage), false));
+        when(messageService.pullOfflineFromCheckpoint(2L, "default", 1)).thenReturn(pageResult(List.of(fileMessage), false));
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"PULL_OFFLINE\",\"limit\":1}"));
         JsonNode resp = readOutboundJson(channel).get(0);
@@ -236,7 +339,7 @@ class WebSocketFrameHandlerIntegrationTest {
         recalled.setContent(null);
         recalled.setRetractedAt(Date.from(Instant.parse("2026-03-25T00:01:00Z")));
         recalled.setRetractedBy(1L);
-        when(messageService.pullRecent(2L, 1)).thenReturn(pageResult(List.of(recalled), false));
+        when(messageService.pullOfflineFromCheckpoint(2L, "default", 1)).thenReturn(pageResult(List.of(recalled), false));
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"PULL_OFFLINE\",\"limit\":1}"));
         JsonNode resp = readOutboundJson(channel).get(0);
@@ -257,7 +360,7 @@ class WebSocketFrameHandlerIntegrationTest {
 
         MessageDO m1 = msg(11L, "s11", Date.from(Instant.parse("2026-03-25T00:00:01Z")), "c11");
         MessageDO m2 = msg(12L, "s12", Date.from(Instant.parse("2026-03-25T00:00:02Z")), "c12");
-        when(messageService.pullRecent(100L, 2)).thenReturn(pageResult(List.of(m1, m2), false));
+        when(messageService.pullOfflineFromCheckpoint(100L, "default", 2)).thenReturn(pageResult(List.of(m1, m2), false));
 
         WebSocketServerProtocolHandler.HandshakeComplete handshake =
                 new WebSocketServerProtocolHandler.HandshakeComplete("/ws", new DefaultHttpHeaders(), null);
@@ -272,6 +375,9 @@ class WebSocketFrameHandlerIntegrationTest {
         assertEquals(2, out.get(1).get("messages").size());
         assertEquals("SYNC_END", out.get(2).get("type").asText());
         assertFalse(out.get(2).get("hasMore").asBoolean());
+        assertEquals("default", out.get(2).get("nextSyncToken").get("deviceId").asText());
+        assertEquals("SINGLE", out.get(2).get("nextSyncToken").get("chatType").asText());
+        verify(messageService).advanceSyncCursor(eq(100L), eq("default"), any(MessageService.SyncCursor.class));
 
         verify(channelUserManager, times(1)).bindUser(any(Channel.class), eq(100L));
     }
@@ -1113,6 +1219,7 @@ class WebSocketFrameHandlerIntegrationTest {
         assertEquals(101L, result.get("groupId").asLong());
         assertEquals(2, result.get("messages").size());
         assertEquals(12L, result.get("nextCursorSeq").asLong());
+        assertEquals("GROUP", result.get("nextSyncToken").get("chatType").asText());
     }
 
     @Test
@@ -1195,6 +1302,7 @@ class WebSocketFrameHandlerIntegrationTest {
         assertEquals("GROUP_PULL_OFFLINE_RESULT", result.get("type").asText());
         assertTrue(result.get("hasMore").asBoolean());
         assertEquals(22L, result.get("nextCursorSeq").asLong());
+        assertEquals(22L, result.get("nextSyncToken").get("cursorSeq").asLong());
         assertEquals(21L, result.get("messages").get(0).get("seq").asLong());
         assertEquals(22L, result.get("messages").get(1).get("seq").asLong());
     }

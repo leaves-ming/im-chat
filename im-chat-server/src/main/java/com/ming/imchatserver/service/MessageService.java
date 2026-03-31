@@ -43,6 +43,28 @@ public interface MessageService {
     MessageDO findByServerMsgId(String serverMsgId);
 
     /**
+     * 查询当前用户的单聊同步游标。
+     * 当前按 userId + deviceId 维度存储，多设备独立 checkpoint。
+     */
+    SyncCursor getSyncCursor(Long toUserId, String deviceId);
+
+    /**
+     * 推进单聊同步游标。
+     * 当前按 userId + deviceId 维度存储，多设备独立 checkpoint。
+     */
+    void advanceSyncCursor(Long toUserId, String deviceId, SyncCursor syncCursor);
+
+    /**
+     * 基于统一同步游标拉取单聊离线消息。
+     */
+    CursorPageResult pullOffline(Long toUserId, String deviceId, SyncCursor syncCursor, int limit);
+
+    /**
+     * 优先基于服务端 checkpoint 增量拉取；无 checkpoint 时退化为 recent。
+     */
+    CursorPageResult pullOfflineFromCheckpoint(Long toUserId, String deviceId, int limit);
+
+    /**
      * 基于游标拉取离线消息（升序）。
      *
      * @param toUserId        接收用户 ID
@@ -61,6 +83,29 @@ public interface MessageService {
      * @return 游标分页结果
      */
     CursorPageResult pullRecent(Long toUserId, int limit);
+
+    /** 统一同步游标。 */
+    class SyncCursor {
+        private final Date cursorCreatedAt;
+        private final Long cursorId;
+
+        public SyncCursor(Date cursorCreatedAt, Long cursorId) {
+            this.cursorCreatedAt = cursorCreatedAt;
+            this.cursorId = cursorId;
+        }
+
+        public Date getCursorCreatedAt() {
+            return cursorCreatedAt;
+        }
+
+        public Long getCursorId() {
+            return cursorId;
+        }
+
+        public boolean isComplete() {
+            return cursorCreatedAt != null && cursorId != null;
+        }
+    }
 
     /** 持久化结果模型。 */
     class PersistResult {

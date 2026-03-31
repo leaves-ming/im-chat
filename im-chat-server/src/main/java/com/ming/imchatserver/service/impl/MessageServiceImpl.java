@@ -9,6 +9,7 @@ import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.dao.OutboxMessageDO;
 import com.ming.imchatserver.mapper.MessageMapper;
 import com.ming.imchatserver.mapper.OutboxMapper;
+import com.ming.imchatserver.mapper.SingleCursorMapper;
 import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.mq.DispatchMessagePayload;
 import com.ming.imchatserver.sensitive.SensitiveWordFilterResult;
@@ -46,6 +47,7 @@ public class MessageServiceImpl implements MessageService {
     private static final String STATUS_ACKED = "ACKED";
     private static final String STATUS_RETRACTED = "RETRACTED";
     private final MessageMapper messageMapper;
+    private final SingleCursorMapper singleCursorMapper;
     private final OutboxMapper outboxMapper;
     private final ReliabilityProperties reliabilityProperties;
     private final RedisStateProperties redisStateProperties;
@@ -58,20 +60,31 @@ public class MessageServiceImpl implements MessageService {
      */
     @Autowired
     public MessageServiceImpl(MessageMapper messageMapper,
+                              SingleCursorMapper singleCursorMapper,
                               OutboxMapper outboxMapper,
                               ReliabilityProperties reliabilityProperties,
                               SensitiveWordService sensitiveWordService,
                               FileService fileService) {
-        this(messageMapper, outboxMapper, reliabilityProperties, null, sensitiveWordService, fileService);
+        this(messageMapper, singleCursorMapper, outboxMapper, reliabilityProperties, null, sensitiveWordService, fileService);
     }
 
     public MessageServiceImpl(MessageMapper messageMapper,
+                              OutboxMapper outboxMapper,
+                              ReliabilityProperties reliabilityProperties,
+                              SensitiveWordService sensitiveWordService,
+                              FileService fileService) {
+        this(messageMapper, null, outboxMapper, reliabilityProperties, null, sensitiveWordService, fileService);
+    }
+
+    public MessageServiceImpl(MessageMapper messageMapper,
+                              SingleCursorMapper singleCursorMapper,
                               OutboxMapper outboxMapper,
                               ReliabilityProperties reliabilityProperties,
                               RedisStateProperties redisStateProperties,
                               SensitiveWordService sensitiveWordService,
                               FileService fileService) {
         this.messageMapper = messageMapper;
+        this.singleCursorMapper = singleCursorMapper;
         this.outboxMapper = outboxMapper;
         this.reliabilityProperties = reliabilityProperties;
         this.redisStateProperties = redisStateProperties;
@@ -83,14 +96,14 @@ public class MessageServiceImpl implements MessageService {
      * 单元测试兼容构造函数。
      */
     public MessageServiceImpl(MessageMapper messageMapper) {
-        this(messageMapper, null, null, null, null, null);
+        this(messageMapper, null, null, null, null, null, null);
     }
 
     /**
      * 单元测试兼容构造函数（含 outbox）。
      */
     public MessageServiceImpl(MessageMapper messageMapper, OutboxMapper outboxMapper) {
-        this(messageMapper, outboxMapper, null, null, null, null);
+        this(messageMapper, null, outboxMapper, null, null, null, null);
     }
 
     /**
@@ -299,15 +312,50 @@ public class MessageServiceImpl implements MessageService {
         return decodeMessage(messageMapper.findByServerMsgId(serverMsgId));
     }
 
+    @Override
+    public SyncCursor getSyncCursor(Long toUserId, String deviceId) {
+        if (singleCursorMapper == null || toUserId == null || deviceId == null || deviceId.isBlank()) {
+            return null;
+        }
+        return toSyncCursor(singleCursorMapper.findByUserIdAndDeviceId(toUserId, deviceId));
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void advanceSyncCursor(Long toUserId, String deviceId, SyncCursor syncCursor) {
+        if (singleCursorMapper == null || toUserId == null || deviceId == null || deviceId.isBlank()
+                || syncCursor == null || !syncCursor.isComplete()) {
+            return;
+        }
+        singleCursorMapper.upsertLastPullCursor(toUserId, deviceId, syncCursor.getCursorCreatedAt(), syncCursor.getCursorId());
+    }
+
+    @Override
+    public CursorPageResult pullOffline(Long toUserId, String deviceId, SyncCursor syncCursor, int limit) {
+        if (syncCursor == null || !syncCursor.isComplete()) {
+            return pullRecent(toUserId, deviceId, limit);
+        }
+        try (Page<MessageDO> ignored = PageHelper.startPage(1, limit + 1, false)) {
+            List<MessageDO> fetched = messageMapper.findByToUserIdAfterCursor(toUserId, syncCursor.getCursorCreatedAt(), syncCursor.getCursorId());
+            return buildPageResult(fetched, limit, false, syncCursor, deviceId);
+        }
+    }
+
+    @Override
+    public CursorPageResult pullOfflineFromCheckpoint(Long toUserId, String deviceId, int limit) {
+        SyncCursor syncCursor = getSyncCursor(toUserId, deviceId);
+        if (syncCursor == null || !syncCursor.isComplete()) {
+            return pullRecent(toUserId, deviceId, limit);
+        }
+        return pullOffline(toUserId, deviceId, syncCursor, limit);
+    }
+
     /**
      * 基于游标进行离线消息拉取（升序）。
      */
     @Override
     public CursorPageResult pullOfflineByCursor(Long toUserId, Date cursorCreatedAt, Long cursorId, int limit) {
-        try (Page<MessageDO> ignored = PageHelper.startPage(1, limit + 1, false)) {
-            List<MessageDO> fetched = messageMapper.findByToUserIdAfterCursor(toUserId, cursorCreatedAt, cursorId);
-            return buildPageResult(fetched, limit, false);
-        }
+        return pullOffline(toUserId, null, new SyncCursor(cursorCreatedAt, cursorId), limit);
     }
 
     /**
@@ -315,16 +363,24 @@ public class MessageServiceImpl implements MessageService {
      */
     @Override
     public CursorPageResult pullRecent(Long toUserId, int limit) {
+        return pullRecent(toUserId, null, limit);
+    }
+
+    private CursorPageResult pullRecent(Long toUserId, String deviceId, int limit) {
         try (Page<MessageDO> ignored = PageHelper.startPage(1, limit + 1, false)) {
             List<MessageDO> fetched = messageMapper.findRecentByToUserId(toUserId);
-            return buildPageResult(fetched, limit, true);
+            return buildPageResult(fetched, limit, true, null, deviceId);
         }
     }
 
     /**
      * 将查询结果组装为统一的游标分页返回结构。
      */
-    private CursorPageResult buildPageResult(List<MessageDO> fetched, int limit, boolean reverseToAsc) {
+    private CursorPageResult buildPageResult(List<MessageDO> fetched,
+                                             int limit,
+                                             boolean reverseToAsc,
+                                             SyncCursor baseCursor,
+                                             String deviceId) {
         boolean hasMore = fetched.size() > limit;
         List<MessageDO> selected = hasMore ? fetched.subList(0, limit) : fetched;
 
@@ -342,9 +398,21 @@ public class MessageServiceImpl implements MessageService {
             MessageDO last = messages.get(messages.size() - 1);
             nextCursorCreatedAt = last.getCreatedAt();
             nextCursorId = last.getId();
+        } else if (baseCursor != null && baseCursor.isComplete()) {
+            nextCursorCreatedAt = baseCursor.getCursorCreatedAt();
+            nextCursorId = baseCursor.getCursorId();
+        } else if (deviceId != null && !deviceId.isBlank()) {
+            nextCursorId = 0L;
         }
 
         return new CursorPageResult(messages, hasMore, nextCursorCreatedAt, nextCursorId);
+    }
+
+    private SyncCursor toSyncCursor(com.ming.imchatserver.dao.SingleCursorDO cursor) {
+        if (cursor == null || cursor.getLastPullCreatedAt() == null || cursor.getLastPullMessageId() == null) {
+            return null;
+        }
+        return new SyncCursor(cursor.getLastPullCreatedAt(), cursor.getLastPullMessageId());
     }
 
     private MessageDO decodeMessage(MessageDO message) {
