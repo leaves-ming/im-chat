@@ -729,10 +729,36 @@ class WebSocketFrameHandlerIntegrationTest {
         JsonNode result = readOutboundJson(requester).get(0);
 
         assertEquals("MSG_RECALL_RESULT", result.get("type").asText());
+        assertEquals("cid-recall-1", result.get("clientMsgId").asText());
+        assertEquals(1L, result.get("fromUserId").asLong());
+        assertEquals(2L, result.get("toUserId").asLong());
+        assertEquals("TEXT", result.get("msgType").asText());
         assertEquals("RETRACTED", result.get("status").asText());
         assertTrue(result.get("content").isNull());
-        assertTrue(readOutboundJson(senderSelf).isEmpty());
-        assertTrue(readOutboundJson(recipient).isEmpty());
+        assertEquals("2026-03-25T00:00:00Z", result.get("createdAt").asText());
+        assertEquals("2026-03-25T00:01:00Z", result.get("retractedAt").asText());
+        JsonNode senderNotify = readOutboundJson(senderSelf).get(0);
+        JsonNode recipientNotify = readOutboundJson(recipient).get(0);
+        assertEquals("MSG_RECALL_NOTIFY", senderNotify.get("type").asText());
+        assertEquals("MSG_RECALL_NOTIFY", recipientNotify.get("type").asText());
+        assertEquals("srv-recall-1", senderNotify.get("serverMsgId").asText());
+        assertEquals("srv-recall-1", recipientNotify.get("serverMsgId").asText());
+        assertEquals(result.get("clientMsgId").asText(), senderNotify.get("clientMsgId").asText());
+        assertEquals(result.get("fromUserId").asLong(), senderNotify.get("fromUserId").asLong());
+        assertEquals(result.get("toUserId").asLong(), senderNotify.get("toUserId").asLong());
+        assertEquals(result.get("msgType").asText(), senderNotify.get("msgType").asText());
+        assertEquals(result.get("status").asText(), senderNotify.get("status").asText());
+        assertEquals(result.get("createdAt").asText(), senderNotify.get("createdAt").asText());
+        assertEquals(result.get("retractedAt").asText(), senderNotify.get("retractedAt").asText());
+        assertEquals(result.get("retractedBy").asLong(), senderNotify.get("retractedBy").asLong());
+        assertEquals(result.get("clientMsgId").asText(), recipientNotify.get("clientMsgId").asText());
+        assertEquals(result.get("fromUserId").asLong(), recipientNotify.get("fromUserId").asLong());
+        assertEquals(result.get("toUserId").asLong(), recipientNotify.get("toUserId").asLong());
+        assertEquals(result.get("msgType").asText(), recipientNotify.get("msgType").asText());
+        assertEquals(result.get("status").asText(), recipientNotify.get("status").asText());
+        assertEquals(result.get("createdAt").asText(), recipientNotify.get("createdAt").asText());
+        assertEquals(result.get("retractedAt").asText(), recipientNotify.get("retractedAt").asText());
+        assertEquals(result.get("retractedBy").asLong(), recipientNotify.get("retractedBy").asLong());
     }
 
     @Test
@@ -776,10 +802,36 @@ class WebSocketFrameHandlerIntegrationTest {
         JsonNode notify3 = readOutboundJson(member3).get(0);
 
         assertEquals("GROUP_MSG_RECALL_RESULT", result.get("type").asText());
+        assertEquals("g-recall-1", result.get("serverMsgId").asText());
+        assertTrue(result.get("clientMsgId").isNull());
+        assertEquals(101L, result.get("groupId").asLong());
+        assertEquals(61L, result.get("seq").asLong());
+        assertEquals(1L, result.get("fromUserId").asLong());
+        assertEquals("TEXT", result.get("msgType").asText());
         assertEquals("RETRACTED", result.get("status").asText());
         assertTrue(result.get("content").isNull());
+        assertEquals("2026-03-25T00:00:00Z", result.get("createdAt").asText());
+        assertEquals("2026-03-25T00:01:00Z", result.get("retractedAt").asText());
         assertEquals("GROUP_MSG_RECALL_NOTIFY", notify2.get("type").asText());
         assertEquals("GROUP_MSG_RECALL_NOTIFY", notify3.get("type").asText());
+        assertEquals(result.get("serverMsgId").asText(), notify2.get("serverMsgId").asText());
+        assertEquals(result.get("groupId").asLong(), notify2.get("groupId").asLong());
+        assertEquals(result.get("seq").asLong(), notify2.get("seq").asLong());
+        assertEquals(result.get("fromUserId").asLong(), notify2.get("fromUserId").asLong());
+        assertEquals(result.get("msgType").asText(), notify2.get("msgType").asText());
+        assertEquals(result.get("status").asText(), notify2.get("status").asText());
+        assertEquals(result.get("createdAt").asText(), notify2.get("createdAt").asText());
+        assertEquals(result.get("retractedAt").asText(), notify2.get("retractedAt").asText());
+        assertEquals(result.get("retractedBy").asLong(), notify2.get("retractedBy").asLong());
+        assertEquals(result.get("serverMsgId").asText(), notify3.get("serverMsgId").asText());
+        assertEquals(result.get("groupId").asLong(), notify3.get("groupId").asLong());
+        assertEquals(result.get("seq").asLong(), notify3.get("seq").asLong());
+        assertEquals(result.get("fromUserId").asLong(), notify3.get("fromUserId").asLong());
+        assertEquals(result.get("msgType").asText(), notify3.get("msgType").asText());
+        assertEquals(result.get("status").asText(), notify3.get("status").asText());
+        assertEquals(result.get("createdAt").asText(), notify3.get("createdAt").asText());
+        assertEquals(result.get("retractedAt").asText(), notify3.get("retractedAt").asText());
+        assertEquals(result.get("retractedBy").asLong(), notify3.get("retractedBy").asLong());
     }
 
     @Test

@@ -21,7 +21,7 @@ class ImChatServerApplicationTests {
     static class TestBeans {
         @Bean
         DispatchProducer dispatchProducer() {
-            return payload -> {
+            return (tag, payload) -> {
             };
         }
     }

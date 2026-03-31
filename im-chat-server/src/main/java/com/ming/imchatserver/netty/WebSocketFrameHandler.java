@@ -13,6 +13,7 @@ import com.ming.imchatserver.dao.GroupMessageDO;
 import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.message.MessageContentCodec;
+import com.ming.imchatserver.message.RecallProtocolSupport;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.file.FileAccessDeniedException;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
@@ -547,8 +548,9 @@ import java.util.concurrent.RejectedExecutionException;
             throw ex;
         }
         GroupMessageDO message = persistResult.getMessage();
-
-        dispatchGroupPush(groupId, message);
+        if (!distributedDispatchEnabled()) {
+            dispatchGroupPush(groupId, message);
+        }
     }
 
     private void handleGroupPullOffline(Channel ch, Long fromUserId, JsonNode node) throws Exception {
@@ -686,6 +688,9 @@ import java.util.concurrent.RejectedExecutionException;
         }
         MessageDO recalled = messageService.recallMessage(fromUserId, serverMsgId, recallWindowSeconds());
         sendSingleRecallResult(ch, recalled);
+        if (!distributedDispatchEnabled()) {
+            notifySingleRecallParticipants(ch, recalled);
+        }
     }
 
     private void handleGroupMessageRecall(Channel ch, Long fromUserId, JsonNode node) throws Exception {
@@ -709,7 +714,9 @@ import java.util.concurrent.RejectedExecutionException;
         }
         GroupMessageDO recalled = groupMessageService.recallMessage(fromUserId, serverMsgId, recallWindowSeconds());
         sendGroupRecallResult(ch, recalled);
-        notifyGroupRecall(recalled);
+        if (!distributedDispatchEnabled()) {
+            notifyGroupRecall(ch, recalled);
+        }
     }
 
     /**
@@ -1108,30 +1115,51 @@ import java.util.concurrent.RejectedExecutionException;
     }
 
     private void sendSingleRecallResult(Channel ch, MessageDO message) throws Exception {
-        ObjectNode result = mapper.createObjectNode();
-        result.put("type", "MSG_RECALL_RESULT");
-        writeSingleMessageNode(result, message);
+        ObjectNode result = RecallProtocolSupport.buildSingleRecallNode(mapper, "MSG_RECALL_RESULT", message);
         ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(result)));
     }
 
     private void sendGroupRecallResult(Channel ch, GroupMessageDO message) throws Exception {
-        ObjectNode result = mapper.createObjectNode();
-        result.put("type", "GROUP_MSG_RECALL_RESULT");
-        writeGroupMessageNode(result, message);
+        ObjectNode result = RecallProtocolSupport.buildGroupRecallNode(mapper, "GROUP_MSG_RECALL_RESULT", message);
         ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(result)));
     }
 
-    private void notifyGroupRecall(GroupMessageDO message) throws Exception {
-        ObjectNode notify = mapper.createObjectNode();
-        notify.put("type", "GROUP_MSG_RECALL_NOTIFY");
-        writeGroupMessageNode(notify, message);
+    private void notifySingleRecallParticipants(Channel requester, MessageDO message) throws Exception {
+        if (message == null) {
+            return;
+        }
+        ObjectNode notify = RecallProtocolSupport.buildSingleRecallNode(mapper, "MSG_RECALL_NOTIFY", message);
+        String payload = mapper.writeValueAsString(notify);
+
+        for (Channel channel : channelUserManager.getChannels(message.getFromUserId())) {
+            if (channel == requester) {
+                continue;
+            }
+            channel.writeAndFlush(new TextWebSocketFrame(payload));
+        }
+        for (Channel channel : channelUserManager.getChannels(message.getToUserId())) {
+            channel.writeAndFlush(new TextWebSocketFrame(payload));
+        }
+    }
+
+    private void notifyGroupRecall(Channel requester, GroupMessageDO message) throws Exception {
+        ObjectNode notify = RecallProtocolSupport.buildGroupRecallNode(mapper, "GROUP_MSG_RECALL_NOTIFY", message);
         String payload = mapper.writeValueAsString(notify);
 
         for (Long userId : groupService.listActiveMemberUserIds(message.getGroupId())) {
             for (Channel c : channelUserManager.getChannels(userId)) {
+                if (c == requester) {
+                    continue;
+                }
                 c.writeAndFlush(new TextWebSocketFrame(payload));
             }
         }
+    }
+
+    private boolean distributedDispatchEnabled() {
+        return redisStateProperties != null
+                && redisStateProperties.getServerId() != null
+                && !redisStateProperties.getServerId().isBlank();
     }
 
     /**

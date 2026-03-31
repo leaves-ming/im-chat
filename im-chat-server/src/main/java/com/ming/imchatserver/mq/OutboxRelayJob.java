@@ -75,7 +75,7 @@ public class OutboxRelayJob {
             metricsService.incrementRelaySend();
             try {
                 DispatchMessagePayload payload = objectMapper.readValue(outbox.getPayload(), DispatchMessagePayload.class);
-                dispatchProducer.sendSingleDispatch(payload);
+                dispatchProducer.sendDispatch(outbox.getTag(), payload);
                 outboxMapper.markSent(outbox.getId());
                 logger.debug("outbox sent eventId={} serverMsgId={}", outbox.getEventId(), payload.getServerMsgId());
             } catch (Exception ex) {

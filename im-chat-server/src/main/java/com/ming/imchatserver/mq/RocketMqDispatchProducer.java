@@ -23,8 +23,9 @@ public class RocketMqDispatchProducer implements DispatchProducer {
     }
 
     @Override
-    public void sendSingleDispatch(DispatchMessagePayload payload) {
-        String destination = reliabilityProperties.getDispatchTopic() + ":SINGLE";
+    public void sendDispatch(String tag, DispatchMessagePayload payload) {
+        String resolvedTag = (tag == null || tag.isBlank()) ? DispatchMessagePayload.TAG_SINGLE : tag;
+        String destination = reliabilityProperties.getDispatchTopic() + ":" + resolvedTag;
         rocketMQTemplate.syncSend(destination,
                 MessageBuilder.withPayload(payload)
                         .setHeader("KEYS", payload.getServerMsgId())

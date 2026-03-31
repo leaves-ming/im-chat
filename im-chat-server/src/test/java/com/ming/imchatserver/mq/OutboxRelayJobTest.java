@@ -42,7 +42,7 @@ class OutboxRelayJobTest {
         OutboxRelayJob job = new OutboxRelayJob(outboxMapper, dispatchProducer, properties, metricsService, null);
         job.relay();
 
-        verify(dispatchProducer, never()).sendSingleDispatch(any());
+        verify(dispatchProducer, never()).sendDispatch(any(), any());
         verify(outboxMapper, never()).markSent(any());
         verify(outboxMapper, never()).markRetryOrDlq(any(), any(Integer.class), any(Integer.class), any(Date.class), any());
         verify(metricsService, never()).incrementRelaySend();
@@ -68,7 +68,7 @@ class OutboxRelayJobTest {
         job.relay();
 
         verify(metricsService).incrementRelaySend();
-        verify(dispatchProducer).sendSingleDispatch(any(DispatchMessagePayload.class));
+        verify(dispatchProducer).sendDispatch(eq(DispatchMessagePayload.TAG_SINGLE), any(DispatchMessagePayload.class));
         verify(outboxMapper).markSent(2L);
         verify(outboxMapper, never()).markRetryOrDlq(any(), any(Integer.class), any(Integer.class), any(Date.class), any());
     }
@@ -89,7 +89,8 @@ class OutboxRelayJobTest {
         outbox.setRetryCount(1);
         when(outboxMapper.findReadyBatch(any(Date.class), eq(10))).thenReturn(List.of(outbox));
         when(outboxMapper.claimForProcessing(eq(3L), any(Date.class))).thenReturn(1);
-        doThrow(new IllegalStateException("mq down")).when(dispatchProducer).sendSingleDispatch(any(DispatchMessagePayload.class));
+        doThrow(new IllegalStateException("mq down")).when(dispatchProducer)
+                .sendDispatch(eq(DispatchMessagePayload.TAG_SINGLE), any(DispatchMessagePayload.class));
 
         OutboxRelayJob job = new OutboxRelayJob(outboxMapper, dispatchProducer, properties, metricsService, null);
         job.relay();
@@ -104,6 +105,7 @@ class OutboxRelayJobTest {
         OutboxMessageDO outbox = new OutboxMessageDO();
         outbox.setId(id);
         outbox.setEventId("evt-" + id);
+        outbox.setTag(DispatchMessagePayload.TAG_SINGLE);
         outbox.setPayload("""
                 {
                   "eventId":"evt-1",

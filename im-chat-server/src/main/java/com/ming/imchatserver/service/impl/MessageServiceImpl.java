@@ -4,6 +4,7 @@ import com.github.pagehelper.Page;
 import com.github.pagehelper.PageHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ming.imchatserver.config.ReliabilityProperties;
+import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.dao.OutboxMessageDO;
 import com.ming.imchatserver.mapper.MessageMapper;
@@ -47,6 +48,7 @@ public class MessageServiceImpl implements MessageService {
     private final MessageMapper messageMapper;
     private final OutboxMapper outboxMapper;
     private final ReliabilityProperties reliabilityProperties;
+    private final RedisStateProperties redisStateProperties;
     private final SensitiveWordService sensitiveWordService;
     private final FileService fileService;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -60,9 +62,19 @@ public class MessageServiceImpl implements MessageService {
                               ReliabilityProperties reliabilityProperties,
                               SensitiveWordService sensitiveWordService,
                               FileService fileService) {
+        this(messageMapper, outboxMapper, reliabilityProperties, null, sensitiveWordService, fileService);
+    }
+
+    public MessageServiceImpl(MessageMapper messageMapper,
+                              OutboxMapper outboxMapper,
+                              ReliabilityProperties reliabilityProperties,
+                              RedisStateProperties redisStateProperties,
+                              SensitiveWordService sensitiveWordService,
+                              FileService fileService) {
         this.messageMapper = messageMapper;
         this.outboxMapper = outboxMapper;
         this.reliabilityProperties = reliabilityProperties;
+        this.redisStateProperties = redisStateProperties;
         this.sensitiveWordService = sensitiveWordService;
         this.fileService = fileService;
     }
@@ -71,14 +83,14 @@ public class MessageServiceImpl implements MessageService {
      * 单元测试兼容构造函数。
      */
     public MessageServiceImpl(MessageMapper messageMapper) {
-        this(messageMapper, null, null, null, null);
+        this(messageMapper, null, null, null, null, null);
     }
 
     /**
      * 单元测试兼容构造函数（含 outbox）。
      */
     public MessageServiceImpl(MessageMapper messageMapper, OutboxMapper outboxMapper) {
-        this(messageMapper, outboxMapper, null, null, null);
+        this(messageMapper, outboxMapper, null, null, null, null);
     }
 
     /**
@@ -149,12 +161,14 @@ public class MessageServiceImpl implements MessageService {
             DispatchMessagePayload payload = new DispatchMessagePayload();
             payload.setEventId(UUID.randomUUID().toString());
             payload.setEventType(DispatchMessagePayload.EVENT_TYPE_MESSAGE);
+            payload.setOriginServerId(currentServerId());
             payload.setServerMsgId(msg.getServerMsgId());
             payload.setClientMsgId(msg.getClientMsgId());
             payload.setFromUserId(msg.getFromUserId());
             payload.setToUserId(msg.getToUserId());
             payload.setContent(logicalContent);
             payload.setMsgType(msg.getMsgType());
+            payload.setCreatedAt(msg.getCreatedAt() == null ? null : msg.getCreatedAt().toInstant().toString());
             appendSingleDispatchOutbox(msg.getId(), payload);
         } catch (Exception ex) {
             throw new IllegalStateException("appendOutbox failed serverMsgId=" + msg.getServerMsgId(), ex);
@@ -378,12 +392,14 @@ public class MessageServiceImpl implements MessageService {
             DispatchMessagePayload payload = new DispatchMessagePayload();
             payload.setEventId(UUID.randomUUID().toString());
             payload.setEventType(DispatchMessagePayload.EVENT_TYPE_RECALL);
+            payload.setOriginServerId(currentServerId());
             payload.setServerMsgId(recalled.getServerMsgId());
             payload.setClientMsgId(recalled.getClientMsgId());
             payload.setFromUserId(recalled.getFromUserId());
             payload.setToUserId(recalled.getToUserId());
             payload.setMsgType(recalled.getMsgType());
             payload.setStatus(STATUS_RETRACTED);
+            payload.setCreatedAt(recalled.getCreatedAt() == null ? null : recalled.getCreatedAt().toInstant().toString());
             payload.setRetractedAt(recalled.getRetractedAt() == null ? null : recalled.getRetractedAt().toInstant().toString());
             payload.setRetractedBy(recalled.getRetractedBy());
             appendSingleDispatchOutbox(recalled.getId(), payload);
@@ -398,12 +414,16 @@ public class MessageServiceImpl implements MessageService {
         outbox.setMessageId(messageId);
         String dispatchTopic = reliabilityProperties == null ? DEFAULT_DISPATCH_TOPIC : reliabilityProperties.getDispatchTopic();
         outbox.setTopic(dispatchTopic);
-        outbox.setTag("SINGLE");
+        outbox.setTag(DispatchMessagePayload.TAG_SINGLE);
         outbox.setPayload(objectMapper.writeValueAsString(payload));
         outbox.setStatus(OUTBOX_STATUS_NEW);
         outbox.setRetryCount(0);
         outbox.setNextRetryAt(new Date());
         outbox.setProcessingAt(null);
         outboxMapper.insert(outbox);
+    }
+
+    private String currentServerId() {
+        return redisStateProperties == null ? null : redisStateProperties.getServerId();
     }
 }

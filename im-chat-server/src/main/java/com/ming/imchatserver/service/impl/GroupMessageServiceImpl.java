@@ -1,10 +1,15 @@
 package com.ming.imchatserver.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ming.imchatserver.config.ReliabilityProperties;
+import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imchatserver.dao.GroupMessageDO;
+import com.ming.imchatserver.dao.OutboxMessageDO;
 import com.ming.imchatserver.mapper.GroupCursorMapper;
 import com.ming.imchatserver.mapper.GroupMessageMapper;
+import com.ming.imchatserver.mapper.OutboxMapper;
 import com.ming.imchatserver.message.MessageContentCodec;
+import com.ming.imchatserver.mq.DispatchMessagePayload;
 import com.ming.imchatserver.sensitive.SensitiveWordFilterResult;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
 import com.ming.imchatserver.sensitive.SensitiveWordService;
@@ -14,6 +19,7 @@ import com.ming.imchatserver.service.GroupService;
 import com.ming.imchatserver.service.MessageRecallException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,6 +37,8 @@ public class GroupMessageServiceImpl implements GroupMessageService {
 
     private static final Logger logger = LoggerFactory.getLogger(GroupMessageServiceImpl.class);
     private static final int MAX_SEQ_ALLOCATE_RETRY = 5;
+    private static final int OUTBOX_STATUS_NEW = 0;
+    private static final String DEFAULT_DISPATCH_TOPIC = "im.msg.dispatch";
     private static final int STATUS_SENT = 1;
     private static final int STATUS_RETRACTED = 2;
 
@@ -39,18 +47,36 @@ public class GroupMessageServiceImpl implements GroupMessageService {
     private final SensitiveWordService sensitiveWordService;
     private final FileService fileService;
     private final GroupService groupService;
+    private final OutboxMapper outboxMapper;
+    private final ReliabilityProperties reliabilityProperties;
+    private final RedisStateProperties redisStateProperties;
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Autowired
+    public GroupMessageServiceImpl(GroupMessageMapper groupMessageMapper,
+                                   GroupCursorMapper groupCursorMapper,
+                                   SensitiveWordService sensitiveWordService,
+                                   FileService fileService,
+                                   GroupService groupService,
+                                   OutboxMapper outboxMapper,
+                                   ReliabilityProperties reliabilityProperties,
+                                   RedisStateProperties redisStateProperties) {
+        this.groupMessageMapper = groupMessageMapper;
+        this.groupCursorMapper = groupCursorMapper;
+        this.sensitiveWordService = sensitiveWordService;
+        this.fileService = fileService;
+        this.groupService = groupService;
+        this.outboxMapper = outboxMapper;
+        this.reliabilityProperties = reliabilityProperties;
+        this.redisStateProperties = redisStateProperties;
+    }
 
     public GroupMessageServiceImpl(GroupMessageMapper groupMessageMapper,
                                    GroupCursorMapper groupCursorMapper,
                                    SensitiveWordService sensitiveWordService,
                                    FileService fileService,
                                    GroupService groupService) {
-        this.groupMessageMapper = groupMessageMapper;
-        this.groupCursorMapper = groupCursorMapper;
-        this.sensitiveWordService = sensitiveWordService;
-        this.fileService = fileService;
-        this.groupService = groupService;
+        this(groupMessageMapper, groupCursorMapper, sensitiveWordService, fileService, groupService, null, null, null);
     }
 
     @Override
@@ -100,6 +126,7 @@ public class GroupMessageServiceImpl implements GroupMessageService {
 
         groupMessageMapper.insert(message);
         message.setContent(content);
+        appendGroupDispatchOutbox(message, DispatchMessagePayload.EVENT_TYPE_MESSAGE);
         return new PersistResult(message);
     }
 
@@ -168,7 +195,9 @@ public class GroupMessageServiceImpl implements GroupMessageService {
             }
             throw new IllegalStateException("recall group message failed serverMsgId=" + serverMsgId);
         }
-        return decodeMessage(groupMessageMapper.findByServerMsgId(serverMsgId));
+        GroupMessageDO recalled = decodeMessage(groupMessageMapper.findByServerMsgId(serverMsgId));
+        appendGroupDispatchOutbox(recalled, DispatchMessagePayload.EVENT_TYPE_RECALL);
+        return recalled;
     }
 
     private String normalizeClientMsgId(String clientMsgId) {
@@ -224,5 +253,50 @@ public class GroupMessageServiceImpl implements GroupMessageService {
         }
         long elapsedMs = System.currentTimeMillis() - createdAt.getTime();
         return elapsedMs >= 0 && elapsedMs <= recallWindowSeconds * 1000L;
+    }
+
+    private void appendGroupDispatchOutbox(GroupMessageDO message, String eventType) {
+        if (outboxMapper == null || message == null) {
+            return;
+        }
+        try {
+            DispatchMessagePayload payload = new DispatchMessagePayload();
+            payload.setEventId(UUID.randomUUID().toString());
+            payload.setEventType(eventType);
+            payload.setOriginServerId(currentServerId());
+            payload.setServerMsgId(message.getServerMsgId());
+            payload.setClientMsgId(message.getClientMsgId());
+            payload.setFromUserId(message.getFromUserId());
+            payload.setGroupId(message.getGroupId());
+            payload.setSeq(message.getSeq());
+            payload.setMsgType(message.getMsgType());
+            payload.setStatus(isRetracted(message) ? "RETRACTED" : "SENT");
+            payload.setContent(DispatchMessagePayload.EVENT_TYPE_RECALL.equals(eventType) ? null : message.getContent());
+            payload.setCreatedAt(message.getCreatedAt() == null ? null : message.getCreatedAt().toInstant().toString());
+            payload.setRetractedAt(message.getRetractedAt() == null ? null : message.getRetractedAt().toInstant().toString());
+            payload.setRetractedBy(message.getRetractedBy());
+            appendDispatchOutbox(message.getId(), DispatchMessagePayload.TAG_GROUP, payload);
+        } catch (Exception ex) {
+            throw new IllegalStateException("append group dispatch outbox failed serverMsgId=" + message.getServerMsgId(), ex);
+        }
+    }
+
+    private void appendDispatchOutbox(Long messageId, String tag, DispatchMessagePayload payload) throws Exception {
+        OutboxMessageDO outbox = new OutboxMessageDO();
+        outbox.setEventId(payload.getEventId());
+        outbox.setMessageId(messageId);
+        String dispatchTopic = reliabilityProperties == null ? DEFAULT_DISPATCH_TOPIC : reliabilityProperties.getDispatchTopic();
+        outbox.setTopic(dispatchTopic);
+        outbox.setTag(tag);
+        outbox.setPayload(objectMapper.writeValueAsString(payload));
+        outbox.setStatus(OUTBOX_STATUS_NEW);
+        outbox.setRetryCount(0);
+        outbox.setNextRetryAt(new Date());
+        outbox.setProcessingAt(null);
+        outboxMapper.insert(outbox);
+    }
+
+    private String currentServerId() {
+        return redisStateProperties == null ? null : redisStateProperties.getServerId();
     }
 }

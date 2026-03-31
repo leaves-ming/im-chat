@@ -15,8 +15,8 @@ public class NoopDispatchProducer implements DispatchProducer {
     private static final Logger logger = LoggerFactory.getLogger(NoopDispatchProducer.class);
 
     @Override
-    public void sendSingleDispatch(DispatchMessagePayload payload) {
-        logger.warn("DispatchProducer fallback active, skip mq send. serverMsgId={} clientMsgId={}",
-                payload.getServerMsgId(), payload.getClientMsgId());
+    public void sendDispatch(String tag, DispatchMessagePayload payload) {
+        logger.warn("DispatchProducer fallback active, skip mq send. tag={} serverMsgId={} clientMsgId={}",
+                tag, payload.getServerMsgId(), payload.getClientMsgId());
     }
 }

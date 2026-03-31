@@ -5,5 +5,5 @@ package com.ming.imchatserver.mq;
  */
 public interface DispatchProducer {
 
-    void sendSingleDispatch(DispatchMessagePayload payload);
+    void sendDispatch(String tag, DispatchMessagePayload payload);
 }
