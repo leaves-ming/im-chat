@@ -104,4 +104,64 @@ class DispatchPushServiceTest {
         assertEquals("MSG_RECALL_NOTIFY", recipientNotify.get("type").asText());
         assertNull(senderOther.readOutbound());
     }
+
+    @Test
+    void dispatchSingleShouldDeliverStatusNotifyToSender() throws Exception {
+        ChannelUserManager channelUserManager = mock(ChannelUserManager.class);
+        MessageService messageService = mock(MessageService.class);
+        GroupMessageService groupMessageService = mock(GroupMessageService.class);
+        GroupService groupService = mock(GroupService.class);
+        EmbeddedChannel sender = new EmbeddedChannel();
+        when(channelUserManager.getChannels(1L)).thenReturn(List.of(sender));
+
+        DispatchPushService service = new DispatchPushService(channelUserManager, messageService, groupMessageService, groupService, new RedisStateProperties());
+        DispatchMessagePayload payload = new DispatchMessagePayload();
+        payload.setEventType(DispatchMessagePayload.EVENT_TYPE_STATUS_NOTIFY);
+        payload.setServerMsgId("srv-s1");
+        payload.setNotifyUserId(1L);
+        payload.setToUserId(2L);
+        payload.setStatus("ACKED");
+
+        service.dispatchSingle(payload);
+
+        JsonNode notify = mapper.readTree(((TextWebSocketFrame) sender.readOutbound()).text());
+        assertEquals("MSG_STATUS_NOTIFY", notify.get("type").asText());
+        assertEquals("srv-s1", notify.get("serverMsgId").asText());
+        assertEquals("ACKED", notify.get("status").asText());
+        assertEquals(2L, notify.get("toUserId").asLong());
+    }
+
+    @Test
+    void dispatchGroupRecallShouldNotSkipOriginNodeMembers() throws Exception {
+        ChannelUserManager channelUserManager = mock(ChannelUserManager.class);
+        MessageService messageService = mock(MessageService.class);
+        GroupMessageService groupMessageService = mock(GroupMessageService.class);
+        GroupService groupService = mock(GroupService.class);
+        EmbeddedChannel member1 = new EmbeddedChannel();
+        EmbeddedChannel member2 = new EmbeddedChannel();
+        when(groupService.listActiveMemberUserIds(101L)).thenReturn(List.of(1L, 2L));
+        when(channelUserManager.getChannels(1L)).thenReturn(List.of(member1));
+        when(channelUserManager.getChannels(2L)).thenReturn(List.of(member2));
+
+        RedisStateProperties redisStateProperties = new RedisStateProperties();
+        redisStateProperties.setServerId("node-a");
+        DispatchPushService service = new DispatchPushService(channelUserManager, messageService, groupMessageService, groupService, redisStateProperties);
+        DispatchMessagePayload payload = new DispatchMessagePayload();
+        payload.setEventType(DispatchMessagePayload.EVENT_TYPE_RECALL);
+        payload.setOriginServerId("node-a");
+        payload.setGroupId(101L);
+        payload.setSeq(61L);
+        payload.setServerMsgId("g-recall-1");
+        payload.setFromUserId(1L);
+        payload.setMsgType("TEXT");
+        payload.setStatus("RETRACTED");
+        payload.setCreatedAt("2026-03-25T00:00:00Z");
+        payload.setRetractedAt("2026-03-25T00:01:00Z");
+        payload.setRetractedBy(1L);
+
+        service.dispatchGroup(payload);
+
+        assertEquals("GROUP_MSG_RECALL_NOTIFY", mapper.readTree(((TextWebSocketFrame) member1.readOutbound()).text()).get("type").asText());
+        assertEquals("GROUP_MSG_RECALL_NOTIFY", mapper.readTree(((TextWebSocketFrame) member2.readOutbound()).text()).get("type").asText());
+    }
 }

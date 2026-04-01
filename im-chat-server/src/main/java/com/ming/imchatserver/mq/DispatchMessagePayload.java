@@ -9,6 +9,7 @@ import lombok.Data;
 public class DispatchMessagePayload {
     public static final String EVENT_TYPE_MESSAGE = "MESSAGE";
     public static final String EVENT_TYPE_RECALL = "RECALL";
+    public static final String EVENT_TYPE_STATUS_NOTIFY = "STATUS_NOTIFY";
     public static final String TAG_SINGLE = "SINGLE";
     public static final String TAG_GROUP = "GROUP";
 
@@ -19,6 +20,7 @@ public class DispatchMessagePayload {
     private String clientMsgId;
     private Long fromUserId;
     private Long toUserId;
+    private Long notifyUserId;
     private Long groupId;
     private Long seq;
     private String content;

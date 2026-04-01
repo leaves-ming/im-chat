@@ -40,6 +40,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -95,6 +96,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(channelUserManager.getChannels(10L)).thenReturn(List.of(senderChannel));
 
         MessageDO saved = new MessageDO();
+        saved.setId(1L);
         saved.setFromUserId(10L);
         saved.setToUserId(20L);
         when(messageService.findByServerMsgId("srv-1")).thenReturn(saved);
@@ -118,6 +120,7 @@ class WebSocketFrameHandlerIntegrationTest {
         assertEquals(1, notifyOut.size());
         assertEquals("MSG_STATUS_NOTIFY", notifyOut.get(0).get("type").asText());
         assertEquals("ACKED", notifyOut.get(0).get("status").asText());
+        verify(messageService).enqueueStatusNotify(saved, "ACKED");
     }
 
     @Test
@@ -144,6 +147,31 @@ class WebSocketFrameHandlerIntegrationTest {
         assertEquals("DELIVERED", result.get("status").asText());
         assertEquals("MSG_STATUS_NOTIFY", notify.get("type").asText());
         assertEquals("DELIVERED", notify.get("status").asText());
+        verify(messageService).enqueueStatusNotify(saved, "DELIVERED");
+    }
+
+    @Test
+    void ackReportShouldUseDistributedNotifyWhenEnqueueSucceeded() throws Exception {
+        EmbeddedChannel senderChannel = new EmbeddedChannel();
+        when(channelUserManager.getChannels(10L)).thenReturn(List.of(senderChannel));
+
+        MessageDO saved = new MessageDO();
+        saved.setId(8L);
+        saved.setFromUserId(10L);
+        saved.setToUserId(20L);
+        when(messageService.findByServerMsgId("srv-mq")).thenReturn(saved);
+        when(messageService.updateStatusByServerMsgId("srv-mq", "ACKED")).thenReturn(1);
+        when(messageService.enqueueStatusNotify(saved, "ACKED")).thenReturn(true);
+
+        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        channel.attr(NettyAttr.USER_ID).set(20L);
+
+        channel.writeInbound(new TextWebSocketFrame("{\"type\":\"ACK_REPORT\",\"serverMsgId\":\"srv-mq\",\"status\":\"ACKED\"}"));
+        JsonNode result = readOutboundJson(channel).get(0);
+
+        assertEquals("ACK_REPORT_RESULT", result.get("type").asText());
+        assertNull(senderChannel.readOutbound());
+        verify(messageService).enqueueStatusNotify(saved, "ACKED");
     }
 
     @Test

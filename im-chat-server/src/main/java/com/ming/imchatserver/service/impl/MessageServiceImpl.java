@@ -313,6 +313,31 @@ public class MessageServiceImpl implements MessageService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean enqueueStatusNotify(MessageDO message, String status) {
+        if (message == null || status == null || outboxMapper == null) {
+            return false;
+        }
+        try {
+            DispatchMessagePayload payload = new DispatchMessagePayload();
+            payload.setEventId(UUID.randomUUID().toString());
+            payload.setEventType(DispatchMessagePayload.EVENT_TYPE_STATUS_NOTIFY);
+            payload.setOriginServerId(currentServerId());
+            payload.setServerMsgId(message.getServerMsgId());
+            payload.setClientMsgId(message.getClientMsgId());
+            payload.setFromUserId(message.getFromUserId());
+            payload.setToUserId(message.getToUserId());
+            payload.setNotifyUserId(message.getFromUserId());
+            payload.setStatus(status);
+            payload.setCreatedAt(message.getCreatedAt() == null ? null : message.getCreatedAt().toInstant().toString());
+            appendSingleDispatchOutbox(message.getId(), payload);
+            return true;
+        } catch (Exception ex) {
+            throw new IllegalStateException("append status notify outbox failed serverMsgId=" + message.getServerMsgId(), ex);
+        }
+    }
+
+    @Override
     public SyncCursor getSyncCursor(Long toUserId, String deviceId) {
         if (singleCursorMapper == null || toUserId == null || deviceId == null || deviceId.isBlank()) {
             return null;

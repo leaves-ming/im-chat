@@ -43,6 +43,11 @@ public interface MessageService {
     MessageDO findByServerMsgId(String serverMsgId);
 
     /**
+     * 发送方状态通知进入分布式 dispatch 链路。
+     */
+    boolean enqueueStatusNotify(MessageDO message, String status);
+
+    /**
      * 查询当前用户的单聊同步游标。
      * 当前按 userId + deviceId 维度存储，多设备独立 checkpoint。
      */

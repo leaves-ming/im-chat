@@ -760,14 +760,17 @@ import java.util.concurrent.RejectedExecutionException;
                 deliveryMapper.upsertAck(m.getId(), reporterUserId, now, null);
                 recordAckLatency(targetStatus, m.getCreatedAt(), now);
             }
-            ObjectNode notify = mapper.createObjectNode();
-            notify.put("type", "MSG_STATUS_NOTIFY");
-            notify.put("serverMsgId", serverMsgId);
-            notify.put("status", targetStatus);
-            notify.put("toUserId", m.getToUserId());
-            String payload = mapper.writeValueAsString(notify);
-            for (Channel c : channelUserManager.getChannels(m.getFromUserId())) {
-                c.writeAndFlush(new TextWebSocketFrame(payload));
+            boolean enqueued = messageService.enqueueStatusNotify(m, targetStatus);
+            if (!enqueued) {
+                ObjectNode notify = mapper.createObjectNode();
+                notify.put("type", "MSG_STATUS_NOTIFY");
+                notify.put("serverMsgId", serverMsgId);
+                notify.put("status", targetStatus);
+                notify.put("toUserId", m.getToUserId());
+                String payload = mapper.writeValueAsString(notify);
+                for (Channel c : channelUserManager.getChannels(m.getFromUserId())) {
+                    c.writeAndFlush(new TextWebSocketFrame(payload));
+                }
             }
         }
     }

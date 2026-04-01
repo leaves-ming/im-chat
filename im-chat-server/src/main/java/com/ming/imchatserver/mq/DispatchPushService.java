@@ -61,6 +61,10 @@ public class DispatchPushService {
             dispatchSingleRecall(payload);
             return;
         }
+        if (DispatchMessagePayload.EVENT_TYPE_STATUS_NOTIFY.equalsIgnoreCase(payload.getEventType())) {
+            dispatchStatusNotify(payload);
+            return;
+        }
 
         Collection<Channel> targets = channelUserManager.getChannels(payload.getToUserId());
         if (targets.isEmpty()) {
@@ -110,6 +114,26 @@ public class DispatchPushService {
                 payload.getServerMsgId(), payload.getToUserId(), deliveredChannels);
     }
 
+    private void dispatchStatusNotify(DispatchMessagePayload payload) throws Exception {
+        Long notifyUserId = payload.getNotifyUserId();
+        if (notifyUserId == null) {
+            logger.warn("mq status notify missing target user serverMsgId={}", payload.getServerMsgId());
+            return;
+        }
+        ObjectNode notify = mapper.createObjectNode();
+        notify.put("type", "MSG_STATUS_NOTIFY");
+        notify.put("serverMsgId", payload.getServerMsgId());
+        notify.put("status", payload.getStatus());
+        if (payload.getToUserId() == null) {
+            notify.putNull("toUserId");
+        } else {
+            notify.put("toUserId", payload.getToUserId());
+        }
+        int deliveredChannels = fanoutToUser(notifyUserId, notify);
+        logger.info("mq status notify delivered serverMsgId={} notifyUserId={} deliveredChannels={}",
+                payload.getServerMsgId(), notifyUserId, deliveredChannels);
+    }
+
     public void dispatchGroup(DispatchMessagePayload payload) throws Exception {
         if (payload == null || payload.getGroupId() == null || groupService == null) {
             return;
@@ -144,7 +168,7 @@ public class DispatchPushService {
     private void dispatchGroupRecall(DispatchMessagePayload payload) throws Exception {
         fanoutGroup(payload.getGroupId(),
                 mapper.writeValueAsString(RecallProtocolSupport.buildGroupRecallNode(mapper, "GROUP_MSG_RECALL_NOTIFY", payload)),
-                isOriginServer(payload.getOriginServerId()));
+                false);
     }
 
     private boolean isRetracted(MessageDO message) {
@@ -218,11 +242,6 @@ public class DispatchPushService {
     }
 
     private void fanoutGroup(Long groupId, String payload, boolean skipCurrentNode) {
-        if (skipCurrentNode) {
-            // 分布式撤回/群推送场景下，请求发起节点已返回结果或已做本地处理，这里按节点维度跳过，避免重复通知。
-            logger.info("mq group dispatch skipped on origin node groupId={}", groupId);
-            return;
-        }
         int deliveredChannels = 0;
         for (Long userId : groupService.listActiveMemberUserIds(groupId)) {
             Collection<Channel> targets = channelUserManager.getChannels(userId);
