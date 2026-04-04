@@ -1,0 +1,87 @@
+spring:
+  datasource:
+    type: com.alibaba.druid.pool.DruidDataSource
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: ${IM_DB_URL:jdbc:mysql://127.0.0.1:3306/im_chat?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai}
+    username: ${IM_DB_USERNAME:root}
+    password: ${IM_DB_PASSWORD:PLEASE_REPLACE_DB_PASSWORD}
+    druid:
+      initial-size: ${IM_DB_POOL_INITIAL_SIZE:5}
+      min-idle: ${IM_DB_POOL_MIN_IDLE:5}
+      max-active: ${IM_DB_POOL_MAX_ACTIVE:20}
+      max-wait: 30000
+      validation-query: SELECT 1
+      test-while-idle: true
+      test-on-borrow: false
+      test-on-return: false
+  data:
+    redis:
+      host: ${IM_REDIS_HOST:127.0.0.1}
+      port: ${IM_REDIS_PORT:6379}
+      password: ${IM_REDIS_PASSWORD:}
+      database: ${IM_REDIS_DATABASE:0}
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 16
+          max-idle: 8
+          min-idle: 1
+          max-wait: 3000ms
+
+rocketmq:
+  name-server: ${IM_ROCKETMQ_NAME_SERVER:127.0.0.1:9876}
+  producer:
+    group: ${IM_ROCKETMQ_PRODUCER_GROUP:im-chat-producer-group}
+  consumer:
+    group: ${IM_ROCKETMQ_CONSUMER_GROUP:im-chat-consumer-group}
+
+redisson:
+  single-server-config:
+    address: ${IM_REDISSON_ADDRESS:redis://127.0.0.1:6379}
+    password: ${IM_REDISSON_PASSWORD:}
+
+mybatis:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.ming.imchatserver.dao
+  configuration:
+    map-underscore-to-camel-case: true
+    cache-enabled: false
+
+im:
+  auth:
+    jwt:
+      secret: ${IM_AUTH_JWT_SECRET:PLEASE_REPLACE_JWT_SECRET}
+  file:
+    max-file-size-bytes: 10485760
+    upload-token-expire-seconds: 900
+    download-sign-secret: ${IM_FILE_DOWNLOAD_SIGN_SECRET:PLEASE_REPLACE_FILE_DOWNLOAD_SECRET}
+    download-sign-expire-seconds: 300
+    download-sign-one-time: false
+    allow-owner-download-without-message: true
+  redis:
+    presence-ttl-seconds: 180
+    client-msg-id-ttl-seconds: 600
+  reliability:
+    relay-batch-size: 100
+    relay-fixed-delay-ms: 1000
+    processing-timeout-ms: 30000
+    max-retry-count: 8
+    dispatch-topic: im.msg.dispatch
+  rate-limit:
+    login-fail:
+      limit: 20
+      window-seconds: 300
+    message-send:
+      limit: 120
+      window-seconds: 60
+    file-upload:
+      limit: 30
+      window-seconds: 60
+    file-download:
+      limit: 60
+      window-seconds: 60
+  observability:
+    trace:
+      header-name: ${IM_TRACE_HEADER_NAME:X-Trace-Id}
+      generate-if-missing: true
+    access-log-enabled: true

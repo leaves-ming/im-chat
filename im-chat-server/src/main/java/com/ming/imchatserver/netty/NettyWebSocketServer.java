@@ -1,11 +1,13 @@
 package com.ming.imchatserver.netty;
 
 import com.ming.imchatserver.config.FileStorageProperties;
+import com.ming.imchatserver.config.InstanceProperties;
 import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.config.RateLimitProperties;
 import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.metrics.MetricsService;
+import com.ming.imchatserver.observability.RuntimeObservabilitySettings;
 import com.ming.imchatserver.service.AuthService;
 import com.ming.imchatserver.service.ContactService;
 import com.ming.imchatserver.service.FileService;
@@ -22,10 +24,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import org.springframework.boot.health.actuate.endpoint.HealthEndpoint;
 
 import java.net.InetSocketAddress;
 import java.util.concurrent.Executor;
@@ -35,6 +39,7 @@ import java.util.concurrent.Executor;
  * 在 Spring 容器启动完成后初始化 Netty 服务端，并在容器关闭时优雅释放资源。
  */
 @Component
+@ConditionalOnProperty(name = "im.netty.enabled", havingValue = "true", matchIfMissing = true)
 public class NettyWebSocketServer {
 
     private static final Logger logger = LoggerFactory.getLogger(NettyWebSocketServer.class);
@@ -56,6 +61,9 @@ public class NettyWebSocketServer {
     private final RateLimitService rateLimitService;
     private final RateLimitProperties rateLimitProperties;
     private final RedisStateProperties redisStateProperties;
+    private final RuntimeObservabilitySettings runtimeObservabilitySettings;
+    private final HealthEndpoint healthEndpoint;
+    private final InstanceProperties instanceProperties;
 
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
@@ -86,7 +94,10 @@ public class NettyWebSocketServer {
                                 IdempotencyService idempotencyService,
                                 RateLimitService rateLimitService,
                                 RateLimitProperties rateLimitProperties,
-                                RedisStateProperties redisStateProperties) {
+                                RedisStateProperties redisStateProperties,
+                                RuntimeObservabilitySettings runtimeObservabilitySettings,
+                                HealthEndpoint healthEndpoint,
+                                InstanceProperties instanceProperties) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
@@ -104,6 +115,9 @@ public class NettyWebSocketServer {
         this.rateLimitService = rateLimitService;
         this.rateLimitProperties = rateLimitProperties;
         this.redisStateProperties = redisStateProperties;
+        this.runtimeObservabilitySettings = runtimeObservabilitySettings;
+        this.healthEndpoint = healthEndpoint;
+        this.instanceProperties = instanceProperties;
     }
 
     @EventListener(ApplicationReadyEvent.class)    /**
@@ -119,7 +133,11 @@ public class NettyWebSocketServer {
         b.group(bossGroup, workerGroup)
                 .channel(NioServerSocketChannel.class)
                 .localAddress(new InetSocketAddress(properties.getPort()))
-                .childHandler(new NettyServerInitializer(properties, authService, channelUserManager, messageService, contactService, groupService, groupMessageService, deliveryMapper, metricsService, fileService, fileStorageProperties, groupPushExecutor, groupPushCoordinator, idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties));
+                .childHandler(new NettyServerInitializer(properties, authService, channelUserManager, messageService,
+                        contactService, groupService, groupMessageService, deliveryMapper, metricsService,
+                        fileService, fileStorageProperties, groupPushExecutor, groupPushCoordinator,
+                        idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
+                        runtimeObservabilitySettings, healthEndpoint, instanceProperties));
         serverChannel = b.bind().sync().channel();
         logger.info("Netty server started and listening on {}", properties.getPort());
     }

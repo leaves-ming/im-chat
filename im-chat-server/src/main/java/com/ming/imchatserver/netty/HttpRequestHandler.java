@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ming.imchatserver.config.FileStorageProperties;
+import com.ming.imchatserver.config.InstanceProperties;
 import com.ming.imchatserver.config.NettyProperties;
+import com.ming.imchatserver.config.ObservabilityProperties;
 import com.ming.imchatserver.config.RateLimitProperties;
 import com.ming.imchatserver.file.FileAccessDeniedException;
 import com.ming.imchatserver.file.FileMetadata;
@@ -12,6 +14,8 @@ import com.ming.imchatserver.file.FileNotFoundBizException;
 import com.ming.imchatserver.file.LocalFileStorageServiceImpl;
 import com.ming.imchatserver.file.StoredFileResource;
 import com.ming.imchatserver.metrics.MetricsService;
+import com.ming.imchatserver.observability.RuntimeObservabilitySettings;
+import com.ming.imchatserver.observability.TraceContextSupport;
 import com.ming.imchatserver.service.AuthService;
 import com.ming.imchatserver.service.FileService;
 import com.ming.imchatserver.service.RateLimitService;
@@ -40,6 +44,8 @@ import io.netty.handler.codec.http.multipart.InterfaceHttpData;
 import io.netty.handler.stream.ChunkedNioFile;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.health.actuate.endpoint.HealthDescriptor;
+import org.springframework.boot.health.actuate.endpoint.HealthEndpoint;
 
 import java.io.InputStream;
 import java.io.RandomAccessFile;
@@ -64,6 +70,9 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
     private final FileStorageProperties fileStorageProperties;
     private final RateLimitService rateLimitService;
     private final RateLimitProperties rateLimitProperties;
+    private final RuntimeObservabilitySettings runtimeObservabilitySettings;
+    private final HealthEndpoint healthEndpoint;
+    private final InstanceProperties instanceProperties;
     private final ObjectMapper mapper = new ObjectMapper();
 
     public HttpRequestHandler(NettyProperties properties,
@@ -72,7 +81,10 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
                               FileService fileService,
                               FileStorageProperties fileStorageProperties,
                               RateLimitService rateLimitService,
-                              RateLimitProperties rateLimitProperties) {
+                              RateLimitProperties rateLimitProperties,
+                              RuntimeObservabilitySettings runtimeObservabilitySettings,
+                              HealthEndpoint healthEndpoint,
+                              InstanceProperties instanceProperties) {
         this.properties = properties;
         this.authService = authService;
         this.metricsService = metricsService;
@@ -80,6 +92,9 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
         this.fileStorageProperties = fileStorageProperties;
         this.rateLimitService = rateLimitService;
         this.rateLimitProperties = rateLimitProperties;
+        this.runtimeObservabilitySettings = runtimeObservabilitySettings;
+        this.healthEndpoint = healthEndpoint;
+        this.instanceProperties = instanceProperties;
     }
 
     public HttpRequestHandler(NettyProperties properties,
@@ -87,53 +102,102 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
                               MetricsService metricsService,
                               FileService fileService,
                               FileStorageProperties fileStorageProperties) {
-        this(properties, authService, metricsService, fileService, fileStorageProperties, null, null);
+        this(properties, authService, metricsService, fileService, fileStorageProperties, null, null, null, null, null);
     }
 
     /**
      * 单元测试兼容构造函数。
      */
     public HttpRequestHandler(NettyProperties properties, AuthService authService) {
-        this(properties, authService, null, null, null, null, null);
+        this(properties, authService, null, null, null, null, null, null, null, null);
     }
 
     public HttpRequestHandler(NettyProperties properties, AuthService authService, MetricsService metricsService) {
-        this(properties, authService, metricsService, null, null, null, null);
+        this(properties, authService, metricsService, null, null, null, null, null, null, null);
     }
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest req) throws Exception {
-        String uri = req.uri();
-        if (HttpMethod.GET.equals(req.method()) && isSignedFileDownloadRequest(uri)) {
-            handleSignedFileDownload(ctx, req);
-            return;
-        }
-        if (HttpMethod.GET.equals(req.method()) && uri.startsWith("/internal/metrics")) {
-            if (metricsService == null) {
-                writeJson(ctx, "{\"code\":1,\"msg\":\"metrics service unavailable\"}", HttpResponseStatus.SERVICE_UNAVAILABLE);
+        RuntimeObservabilitySettings settings = runtimeSettings();
+        String traceId = TraceContextSupport.resolveHttpTraceId(req.headers(), settings);
+        TraceContextSupport.putMdc(traceId);
+        ctx.channel().attr(NettyAttr.TRACE_ID).set(traceId);
+        try {
+            String uri = req.uri();
+            if (settings.isAccessLogEnabled()) {
+                logger.info("http request method={} uri={} remoteIp={} traceId={}",
+                        req.method().name(), uri, resolveRemoteIp(ctx, req), traceId);
+            }
+            if (HttpMethod.GET.equals(req.method()) && isSignedFileDownloadRequest(uri)) {
+                handleSignedFileDownload(ctx, req);
                 return;
             }
-            ObjectNode resp = mapper.createObjectNode();
-            resp.put("code", 0);
-            resp.put("msg", "ok");
-            resp.set("data", mapper.valueToTree(metricsService.snapshot().asMap()));
-            writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.OK);
-            return;
-        }
-        if (HttpMethod.POST.equals(req.method()) && uri.startsWith("/api/file/upload")) {
-            handleFileUpload(ctx, req);
-            return;
-        }
-        if (HttpMethod.POST.equals(req.method()) && uri.startsWith("/api/file/download-url")) {
-            handleFileDownloadUrl(ctx, req);
-            return;
-        }
-        if (HttpMethod.POST.equals(req.method()) && uri.startsWith("/api/auth/login")) {
-            handleLogin(ctx, req);
-            return;
-        }
+            if (HttpMethod.GET.equals(req.method()) && uri.startsWith("/internal/metrics")) {
+                if (metricsService == null) {
+                    writeJson(ctx, "{\"code\":1,\"msg\":\"metrics service unavailable\"}", HttpResponseStatus.SERVICE_UNAVAILABLE);
+                    return;
+                }
+                ObjectNode resp = mapper.createObjectNode();
+                resp.put("code", 0);
+                resp.put("msg", "ok");
+                resp.put("traceId", traceId);
+                resp.set("data", mapper.valueToTree(metricsService.snapshot().asMap()));
+                writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.OK, traceId);
+                return;
+            }
+            if (HttpMethod.GET.equals(req.method()) && uri.startsWith("/internal/health")) {
+                handleHealth(ctx, traceId);
+                return;
+            }
+            if (HttpMethod.GET.equals(req.method()) && uri.startsWith("/internal/instance")) {
+                handleInstance(ctx, traceId);
+                return;
+            }
+            if (HttpMethod.POST.equals(req.method()) && uri.startsWith("/api/file/upload")) {
+                handleFileUpload(ctx, req);
+                return;
+            }
+            if (HttpMethod.POST.equals(req.method()) && uri.startsWith("/api/file/download-url")) {
+                handleFileDownloadUrl(ctx, req);
+                return;
+            }
+            if (HttpMethod.POST.equals(req.method()) && uri.startsWith("/api/auth/login")) {
+                handleLogin(ctx, req);
+                return;
+            }
 
-        ctx.fireChannelRead(req.retain());
+            ctx.fireChannelRead(req.retain());
+        } finally {
+            TraceContextSupport.clearMdc();
+        }
+    }
+
+    private void handleHealth(ChannelHandlerContext ctx, String traceId) throws Exception {
+        if (healthEndpoint == null) {
+            writeJson(ctx, "{\"code\":1,\"msg\":\"health endpoint unavailable\"}", HttpResponseStatus.SERVICE_UNAVAILABLE, traceId);
+            return;
+        }
+        HealthDescriptor health = healthEndpoint.health();
+        ObjectNode resp = mapper.createObjectNode();
+        resp.put("code", 0);
+        resp.put("msg", "ok");
+        resp.put("traceId", traceId);
+        resp.set("data", mapper.valueToTree(health));
+        writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.OK, traceId);
+    }
+
+    private void handleInstance(ChannelHandlerContext ctx, String traceId) throws Exception {
+        ObjectNode data = mapper.createObjectNode();
+        data.put("version", instanceProperties == null ? "unknown" : instanceProperties.getVersion());
+        data.put("zone", instanceProperties == null ? "default" : instanceProperties.getZone());
+        data.put("protocol", instanceProperties == null ? "netty-ws-http" : instanceProperties.getProtocol());
+        data.put("startupTime", instanceProperties == null ? "unknown" : instanceProperties.getStartupTime());
+        ObjectNode resp = mapper.createObjectNode();
+        resp.put("code", 0);
+        resp.put("msg", "ok");
+        resp.put("traceId", traceId);
+        resp.set("data", data);
+        writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.OK, traceId);
     }
 
     private void handleLogin(ChannelHandlerContext ctx, FullHttpRequest req) throws Exception {
@@ -152,7 +216,7 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
                 resp.put("code", 0);
                 resp.put("msg", "ok");
                 resp.set("data", data);
-                writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.OK);
+                writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.OK, TraceContextSupport.currentTraceId(ctx.channel()));
                 logger.info("login success username={} userId={}", username, result.userId);
                 return;
             }
@@ -162,7 +226,7 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
             if (!consumeRateLimit("login_fail", "ip", remoteIp,
                     rateLimitProperties == null ? 0L : rateLimitProperties.getLoginFail().getLimit(),
                     rateLimitProperties == null ? 0L : rateLimitProperties.getLoginFail().getWindowSeconds())) {
-                writeJson(ctx, "{\"code\":429,\"msg\":\"too many requests\"}", HttpResponseStatus.TOO_MANY_REQUESTS);
+                writeJson(ctx, "{\"code\":429,\"msg\":\"too many requests\"}", HttpResponseStatus.TOO_MANY_REQUESTS, TraceContextSupport.currentTraceId(ctx.channel()));
                 return;
             }
             consumeRateLimit("login_fail", "deviceId", deviceId,
@@ -170,30 +234,30 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
                     rateLimitProperties == null ? 0L : rateLimitProperties.getLoginFail().getWindowSeconds());
             resp.put("code", 401);
             resp.put("msg", "invalid credentials");
-            writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.UNAUTHORIZED);
+            writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.UNAUTHORIZED, TraceContextSupport.currentTraceId(ctx.channel()));
         } catch (Exception ex) {
             logger.warn("invalid login request body", ex);
             ObjectNode resp = mapper.createObjectNode();
             resp.put("code", 400);
             resp.put("msg", "bad request");
-            writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.BAD_REQUEST);
+            writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.BAD_REQUEST, TraceContextSupport.currentTraceId(ctx.channel()));
         }
     }
 
     private void handleFileUpload(ChannelHandlerContext ctx, FullHttpRequest req) throws Exception {
         if (fileService == null || fileStorageProperties == null) {
-            writeJson(ctx, "{\"code\":1,\"msg\":\"file storage unavailable\"}", HttpResponseStatus.SERVICE_UNAVAILABLE);
+            writeJson(ctx, "{\"code\":1,\"msg\":\"file storage unavailable\"}", HttpResponseStatus.SERVICE_UNAVAILABLE, TraceContextSupport.currentTraceId(ctx.channel()));
             return;
         }
         Optional<AuthService.AuthUser> authUser = authenticate(req);
         if (authUser.isEmpty()) {
-            writeJson(ctx, "{\"code\":401,\"msg\":\"unauthorized\"}", HttpResponseStatus.UNAUTHORIZED);
+            writeJson(ctx, "{\"code\":401,\"msg\":\"unauthorized\"}", HttpResponseStatus.UNAUTHORIZED, TraceContextSupport.currentTraceId(ctx.channel()));
             return;
         }
         if (!consumeRateLimit("file_upload", "userId", String.valueOf(authUser.get().userId),
                 rateLimitProperties == null ? 0L : rateLimitProperties.getFileUpload().getLimit(),
                 rateLimitProperties == null ? 0L : rateLimitProperties.getFileUpload().getWindowSeconds())) {
-            writeJson(ctx, "{\"code\":429,\"msg\":\"too many requests\"}", HttpResponseStatus.TOO_MANY_REQUESTS);
+            writeJson(ctx, "{\"code\":429,\"msg\":\"too many requests\"}", HttpResponseStatus.TOO_MANY_REQUESTS, TraceContextSupport.currentTraceId(ctx.channel()));
             return;
         }
 
@@ -214,22 +278,22 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
                 }
             }
             if (upload == null || !upload.isCompleted()) {
-                writeJson(ctx, "{\"code\":400,\"msg\":\"file part required\"}", HttpResponseStatus.BAD_REQUEST);
+                writeJson(ctx, "{\"code\":400,\"msg\":\"file part required\"}", HttpResponseStatus.BAD_REQUEST, TraceContextSupport.currentTraceId(ctx.channel()));
                 return;
             }
 
             String sanitizedName = LocalFileStorageServiceImpl.sanitizeFileName(upload.getFilename());
             long fileSize = upload.length();
             if (fileSize <= 0L) {
-                writeJson(ctx, "{\"code\":400,\"msg\":\"file must not be empty\"}", HttpResponseStatus.BAD_REQUEST);
+                writeJson(ctx, "{\"code\":400,\"msg\":\"file must not be empty\"}", HttpResponseStatus.BAD_REQUEST, TraceContextSupport.currentTraceId(ctx.channel()));
                 return;
             }
             if (fileSize > fileStorageProperties.getMaxFileSizeBytes()) {
-                writeJson(ctx, "{\"code\":400,\"msg\":\"file too large\"}", HttpResponseStatus.BAD_REQUEST);
+                writeJson(ctx, "{\"code\":400,\"msg\":\"file too large\"}", HttpResponseStatus.BAD_REQUEST, TraceContextSupport.currentTraceId(ctx.channel()));
                 return;
             }
             if (!isAllowedContentType(partContentType) || !isAllowedExtension(sanitizedName)) {
-                writeJson(ctx, "{\"code\":400,\"msg\":\"file type not allowed\"}", HttpResponseStatus.BAD_REQUEST);
+                writeJson(ctx, "{\"code\":400,\"msg\":\"file type not allowed\"}", HttpResponseStatus.BAD_REQUEST, TraceContextSupport.currentTraceId(ctx.channel()));
                 return;
             }
 
@@ -246,7 +310,7 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
                 resp.put("code", 0);
                 resp.put("msg", "ok");
                 resp.set("data", data);
-                writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.OK);
+                writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.OK, TraceContextSupport.currentTraceId(ctx.channel()));
                 logger.info("file uploaded userId={} fileId={} fileName={} size={}",
                         authUser.get().userId, metadata.getFileId(), metadata.getFileName(), metadata.getSize());
             }
@@ -257,25 +321,25 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
 
     private void handleFileDownloadUrl(ChannelHandlerContext ctx, FullHttpRequest req) throws Exception {
         if (fileService == null || fileStorageProperties == null) {
-            writeJson(ctx, "{\"code\":1,\"msg\":\"file storage unavailable\"}", HttpResponseStatus.SERVICE_UNAVAILABLE);
+            writeJson(ctx, "{\"code\":1,\"msg\":\"file storage unavailable\"}", HttpResponseStatus.SERVICE_UNAVAILABLE, TraceContextSupport.currentTraceId(ctx.channel()));
             return;
         }
         Optional<AuthService.AuthUser> authUser = authenticate(req);
         if (authUser.isEmpty()) {
-            writeJson(ctx, "{\"code\":401,\"msg\":\"unauthorized\"}", HttpResponseStatus.UNAUTHORIZED);
+            writeJson(ctx, "{\"code\":401,\"msg\":\"unauthorized\"}", HttpResponseStatus.UNAUTHORIZED, TraceContextSupport.currentTraceId(ctx.channel()));
             return;
         }
         if (!consumeRateLimit("file_download", "userId", String.valueOf(authUser.get().userId),
                 rateLimitProperties == null ? 0L : rateLimitProperties.getFileDownload().getLimit(),
                 rateLimitProperties == null ? 0L : rateLimitProperties.getFileDownload().getWindowSeconds())) {
-            writeJson(ctx, "{\"code\":429,\"msg\":\"too many requests\"}", HttpResponseStatus.TOO_MANY_REQUESTS);
+            writeJson(ctx, "{\"code\":429,\"msg\":\"too many requests\"}", HttpResponseStatus.TOO_MANY_REQUESTS, TraceContextSupport.currentTraceId(ctx.channel()));
             return;
         }
         try {
             JsonNode body = mapper.readTree(req.content().toString(StandardCharsets.UTF_8));
             String fileId = body == null ? null : body.path("fileId").asText(null);
             if (fileId == null || fileId.isBlank()) {
-                writeJson(ctx, "{\"code\":400,\"msg\":\"fileId required\"}", HttpResponseStatus.BAD_REQUEST);
+                writeJson(ctx, "{\"code\":400,\"msg\":\"fileId required\"}", HttpResponseStatus.BAD_REQUEST, TraceContextSupport.currentTraceId(ctx.channel()));
                 return;
             }
             FileService.DownloadUrlResult result = fileService.createDownloadUrl(authUser.get().userId, fileId);
@@ -286,14 +350,14 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
             resp.put("code", 0);
             resp.put("msg", "ok");
             resp.set("data", data);
-            writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.OK);
+            writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.OK, TraceContextSupport.currentTraceId(ctx.channel()));
         } catch (FileAccessDeniedException ex) {
-            writeJson(ctx, "{\"code\":403,\"msg\":\"forbidden\"}", HttpResponseStatus.FORBIDDEN);
+            writeJson(ctx, "{\"code\":403,\"msg\":\"forbidden\"}", HttpResponseStatus.FORBIDDEN, TraceContextSupport.currentTraceId(ctx.channel()));
         } catch (FileNotFoundBizException ex) {
-            writeJson(ctx, "{\"code\":404,\"msg\":\"not found\"}", HttpResponseStatus.NOT_FOUND);
+            writeJson(ctx, "{\"code\":404,\"msg\":\"not found\"}", HttpResponseStatus.NOT_FOUND, TraceContextSupport.currentTraceId(ctx.channel()));
         } catch (Exception ex) {
             logger.warn("invalid download-url request", ex);
-            writeJson(ctx, "{\"code\":400,\"msg\":\"bad request\"}", HttpResponseStatus.BAD_REQUEST);
+            writeJson(ctx, "{\"code\":400,\"msg\":\"bad request\"}", HttpResponseStatus.BAD_REQUEST, TraceContextSupport.currentTraceId(ctx.channel()));
         }
     }
 
@@ -397,10 +461,24 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
     }
 
     private void writeJson(ChannelHandlerContext ctx, String json, HttpResponseStatus status) {
+        writeJson(ctx, json, status, TraceContextSupport.currentTraceId(ctx.channel()));
+    }
+
+    private void writeJson(ChannelHandlerContext ctx, String json, HttpResponseStatus status, String traceId) {
         FullHttpResponse resp = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, status, Unpooled.copiedBuffer(json, StandardCharsets.UTF_8));
         resp.headers().set(CONTENT_TYPE, "application/json; charset=UTF-8");
         resp.headers().set(HttpHeaderNames.CONTENT_LENGTH, resp.content().readableBytes());
+        if (traceId != null) {
+            resp.headers().set(runtimeSettings().getTraceHeaderName(), traceId);
+        }
         ctx.writeAndFlush(resp).addListener(ChannelFutureListener.CLOSE);
+    }
+
+    private RuntimeObservabilitySettings runtimeSettings() {
+        if (runtimeObservabilitySettings != null) {
+            return runtimeObservabilitySettings;
+        }
+        return new RuntimeObservabilitySettings(new ObservabilityProperties());
     }
 
     private void writePlain(ChannelHandlerContext ctx, HttpResponseStatus status, String body, String contentType) {

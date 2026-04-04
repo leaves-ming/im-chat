@@ -2,6 +2,7 @@ package com.ming.imchatserver.netty;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.ming.imchatserver.observability.TraceContextSupport;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
@@ -51,7 +52,11 @@ import org.slf4j.LoggerFactory;
                     err.put("type", "ERROR");
                     err.put("code", "UNAUTHORIZED");
                     err.put("msg", "channel not authenticated or bound");
-                    String traceId = java.util.UUID.randomUUID().toString();
+                    String traceId = TraceContextSupport.currentTraceId(ctx.channel());
+                    if (traceId == null) {
+                        traceId = java.util.UUID.randomUUID().toString().replace("-", "");
+                        ctx.channel().attr(NettyAttr.TRACE_ID).set(traceId);
+                    }
                     err.put("traceId", traceId);
                     // attempt to fetch reverse mapping for more context
                     Long mapped = channelUserManager.getUserIdByChannelId(ctx.channel().id().asLongText());

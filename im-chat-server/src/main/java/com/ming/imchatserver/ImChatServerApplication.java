@@ -3,6 +3,9 @@ package com.ming.imchatserver;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
+import java.util.HashMap;
+import java.util.Map;
+
 /**
  * IM 聊天服务启动入口。
  * <p>
@@ -19,6 +22,10 @@ public class ImChatServerApplication {
      * @param args 启动参数
      */
     public static void main(String[] args) {
-        SpringApplication.run(ImChatServerApplication.class, args);
+        SpringApplication application = new SpringApplication(ImChatServerApplication.class);
+        Map<String, Object> defaults = new HashMap<>();
+        defaults.put("im.instance.startup-time", Long.toString(System.currentTimeMillis()));
+        application.setDefaultProperties(defaults);
+        application.run(args);
     }
 }

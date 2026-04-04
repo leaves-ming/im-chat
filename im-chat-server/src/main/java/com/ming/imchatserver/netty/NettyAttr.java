@@ -16,4 +16,6 @@ import io.netty.util.AttributeKey;
     public static final AttributeKey<Boolean> BOUND = AttributeKey.valueOf("BOUND");
     /** 当前连接所属设备 ID。 */
     public static final AttributeKey<String> DEVICE_ID = AttributeKey.valueOf("DEVICE_ID");
+    /** 当前连接的 traceId。 */
+    public static final AttributeKey<String> TRACE_ID = AttributeKey.valueOf("TRACE_ID");
 }

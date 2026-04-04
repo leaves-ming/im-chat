@@ -1,11 +1,13 @@
 package com.ming.imchatserver.netty;
 
 import com.ming.imchatserver.config.FileStorageProperties;
+import com.ming.imchatserver.config.InstanceProperties;
 import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.config.RateLimitProperties;
 import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.metrics.MetricsService;
+import com.ming.imchatserver.observability.RuntimeObservabilitySettings;
 import com.ming.imchatserver.service.AuthService;
 import com.ming.imchatserver.service.ContactService;
 import com.ming.imchatserver.service.FileService;
@@ -20,6 +22,7 @@ import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
 import io.netty.handler.stream.ChunkedWriteHandler;
 import io.netty.handler.timeout.IdleStateHandler;
+import org.springframework.boot.health.actuate.endpoint.HealthEndpoint;
 
 import java.util.concurrent.Executor;
 /**
@@ -45,6 +48,9 @@ import java.util.concurrent.Executor;
     private final RateLimitService rateLimitService;
     private final RateLimitProperties rateLimitProperties;
     private final RedisStateProperties redisStateProperties;
+    private final RuntimeObservabilitySettings runtimeObservabilitySettings;
+    private final HealthEndpoint healthEndpoint;
+    private final InstanceProperties instanceProperties;
     /**
      * 创建 Channel 初始化器，并注入各业务 Handler 所需依赖。
      */
@@ -65,7 +71,10 @@ import java.util.concurrent.Executor;
                                   IdempotencyService idempotencyService,
                                   RateLimitService rateLimitService,
                                   RateLimitProperties rateLimitProperties,
-                                  RedisStateProperties redisStateProperties) {
+                                  RedisStateProperties redisStateProperties,
+                                  RuntimeObservabilitySettings runtimeObservabilitySettings,
+                                  HealthEndpoint healthEndpoint,
+                                  InstanceProperties instanceProperties) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
@@ -83,6 +92,9 @@ import java.util.concurrent.Executor;
         this.rateLimitService = rateLimitService;
         this.rateLimitProperties = rateLimitProperties;
         this.redisStateProperties = redisStateProperties;
+        this.runtimeObservabilitySettings = runtimeObservabilitySettings;
+        this.healthEndpoint = healthEndpoint;
+        this.instanceProperties = instanceProperties;
     }
 
     @Override
@@ -102,10 +114,12 @@ import java.util.concurrent.Executor;
         ch.pipeline().addLast(new ChunkedWriteHandler());
 
         // 先处理 REST 请求（如 /api/auth/login），非 REST 请求交由后续处理
-        ch.pipeline().addLast(new HttpRequestHandler(properties, authService, metricsService, fileService, fileStorageProperties, rateLimitService, rateLimitProperties));
+        ch.pipeline().addLast(new HttpRequestHandler(properties, authService, metricsService, fileService,
+                fileStorageProperties, rateLimitService, rateLimitProperties,
+                runtimeObservabilitySettings, healthEndpoint, instanceProperties));
 
         // 握手认证必须在 WebSocketServerProtocolHandler 之前完成
-        ch.pipeline().addLast(new WebSocketHandshakeAuthHandler(properties, authService, channelUserManager));
+        ch.pipeline().addLast(new WebSocketHandshakeAuthHandler(properties, authService, channelUserManager, runtimeObservabilitySettings));
         ch.pipeline().addLast(new WebSocketServerProtocolHandler(properties.getWebsocketPath(), null, true, properties.getMaxContentLength()));
         // 业务帧鉴权（要求 channel 已绑定 userId）
         ch.pipeline().addLast(new WsBusinessAuthHandler(channelUserManager));

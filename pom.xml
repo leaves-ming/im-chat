@@ -25,27 +25,49 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <java.version>21</java.version>
+        <revision>1.0-SNAPSHOT</revision>
         <skipTests>false</skipTests>
 
         <docker.host>http://192.168.3.101:2375</docker.host>
 
+        <spring-cloud.version>2025.1.0</spring-cloud.version>
+        <spring-cloud-alibaba.version>2025.1.0.0</spring-cloud-alibaba.version>
         <hutool.version>5.8.26</hutool.version>
         <mybatis-plus-boot-starter.version>3.5.5</mybatis-plus-boot-starter.version>
         <mybatis-plus-generator.version>3.5.5</mybatis-plus-generator.version>
+        <mybatis-spring-boot-starter.version>3.0.3</mybatis-spring-boot-starter.version>
         <mysql-connector.version>8.0.33</mysql-connector.version>
         <jjwt.version>0.12.5</jjwt.version>
         <logstash-logback.version>8.0</logstash-logback.version>
         <minio.version>8.5.10</minio.version>
         <lombok.version>1.18.34</lombok.version>
         <netty-all.version>4.1.108.Final</netty-all.version>
+        <java-jwt.version>4.4.0</java-jwt.version>
         <weixin-java-mp.version>4.6.0</weixin-java-mp.version>
         <jsoup.version>1.18.1</jsoup.version>
         <okhttp.version>4.12.0</okhttp.version>
+        <pagehelper.version>6.1.0</pagehelper.version>
+        <p6spy.version>3.9.1</p6spy.version>
+        <rocketmq.version>2.3.4</rocketmq.version>
         <redisson-spring-boot-starter.version>3.35.0</redisson-spring-boot-starter.version>
     </properties>
 
     <dependencyManagement>
         <dependencies>
+            <dependency>
+                <groupId>org.springframework.cloud</groupId>
+                <artifactId>spring-cloud-dependencies</artifactId>
+                <version>${spring-cloud.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>com.alibaba.cloud</groupId>
+                <artifactId>spring-cloud-alibaba-dependencies</artifactId>
+                <version>${spring-cloud-alibaba.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
             <!-- 内部模块依赖 -->
 
 <!--            <dependency>-->
@@ -88,7 +110,7 @@
             <dependency>
                 <groupId>org.mybatis.spring.boot</groupId>
                 <artifactId>mybatis-spring-boot-starter</artifactId>
-                <version>3.0.3</version>
+                <version>${mybatis-spring-boot-starter.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.projectlombok</groupId>
@@ -151,6 +173,26 @@
                 <groupId>org.redisson</groupId>
                 <artifactId>redisson-spring-boot-starter</artifactId>
                 <version>${redisson-spring-boot-starter.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.auth0</groupId>
+                <artifactId>java-jwt</artifactId>
+                <version>${java-jwt.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.github.pagehelper</groupId>
+                <artifactId>pagehelper</artifactId>
+                <version>${pagehelper.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>p6spy</groupId>
+                <artifactId>p6spy</artifactId>
+                <version>${p6spy.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.rocketmq</groupId>
+                <artifactId>rocketmq-spring-boot-starter</artifactId>
+                <version>${rocketmq.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

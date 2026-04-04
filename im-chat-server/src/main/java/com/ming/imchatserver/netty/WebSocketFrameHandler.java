@@ -15,6 +15,7 @@ import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.message.RecallProtocolSupport;
 import com.ming.imchatserver.metrics.MetricsService;
+import com.ming.imchatserver.observability.TraceContextSupport;
 import com.ming.imchatserver.file.FileAccessDeniedException;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
 import com.ming.imchatserver.sensitive.SensitiveWordUnavailableException;
@@ -264,7 +265,13 @@ import java.util.concurrent.RejectedExecutionException;
      */
     private void processTextFrame(Channel ch, String textMsg) {
         Long fromUserId = ch.attr(NettyAttr.USER_ID).get();
-        logger.debug("recv text from userId={} channel={} msg={}", fromUserId, ch.id(), textMsg);
+        String traceId = TraceContextSupport.currentTraceId(ch);
+        if (traceId == null) {
+            traceId = java.util.UUID.randomUUID().toString().replace("-", "");
+            ch.attr(NettyAttr.TRACE_ID).set(traceId);
+        }
+        TraceContextSupport.putMdc(traceId);
+        logger.debug("recv text from userId={} channel={} traceId={} msg={}", fromUserId, ch.id(), traceId, textMsg);
         try {
             JsonNode node = mapper.readTree(textMsg);
             if (node == null || !node.has("type")) {
@@ -305,6 +312,8 @@ import java.util.concurrent.RejectedExecutionException;
         } catch (Exception ex) {
             logger.error("process text frame error", ex);
             sendError(ch, "INTERNAL_ERROR", "internal error");
+        } finally {
+            TraceContextSupport.clearMdc();
         }
     }
 
@@ -1140,10 +1149,14 @@ import java.util.concurrent.RejectedExecutionException;
      */
     private void sendError(Channel ch, String code, String msg) {
         try {
+            String traceId = TraceContextSupport.currentTraceId(ch);
             ObjectNode err = mapper.createObjectNode();
             err.put("type", "ERROR");
             err.put("code", code);
             err.put("msg", msg);
+            if (traceId != null) {
+                err.put("traceId", traceId);
+            }
             ch.writeAndFlush(new TextWebSocketFrame(mapper.writeValueAsString(err)));
         } catch (Exception ex) {
             logger.error("sendError failed", ex);

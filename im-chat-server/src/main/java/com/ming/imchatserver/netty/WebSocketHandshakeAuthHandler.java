@@ -2,6 +2,9 @@ package com.ming.imchatserver.netty;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ming.imchatserver.config.NettyProperties;
+import com.ming.imchatserver.config.ObservabilityProperties;
+import com.ming.imchatserver.observability.RuntimeObservabilitySettings;
+import com.ming.imchatserver.observability.TraceContextSupport;
 import com.ming.imchatserver.service.AuthService;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
@@ -36,6 +39,7 @@ import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
     private final NettyProperties properties;
     private final AuthService authService;
     private final ChannelUserManager channelUserManager;
+    private final RuntimeObservabilitySettings runtimeObservabilitySettings;
     private final ObjectMapper mapper = new ObjectMapper();
     /**
      * @param properties          Netty 配置（ws 路径、origin 白名单等）
@@ -43,10 +47,14 @@ import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
      * @param channelUserManager  连接绑定管理器（当前类保留依赖用于后续扩展）
      */
     
-    public WebSocketHandshakeAuthHandler(NettyProperties properties, AuthService authService, ChannelUserManager channelUserManager) {
+    public WebSocketHandshakeAuthHandler(NettyProperties properties,
+                                         AuthService authService,
+                                         ChannelUserManager channelUserManager,
+                                         RuntimeObservabilitySettings runtimeObservabilitySettings) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
+        this.runtimeObservabilitySettings = runtimeObservabilitySettings;
     }
 
     @Override
@@ -107,9 +115,11 @@ import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
                     return;
                 }
                 AuthService.AuthUser u = user.get();
+                String traceId = TraceContextSupport.resolveHttpTraceId(req.headers(), runtimeSettings());
                 // set attr for downstream handlers - do NOT bind here. BIND must happen after handshake complete.
                 ctx.channel().attr(NettyAttr.USER_ID).set(u.userId);
                 ctx.channel().attr(NettyAttr.AUTH_OK).set(Boolean.TRUE);
+                ctx.channel().attr(NettyAttr.TRACE_ID).set(traceId);
                 String deviceId = req.headers().get("X-Device-Id");
                 ctx.channel().attr(NettyAttr.DEVICE_ID).set(deviceId == null ? "default" : deviceId.trim());
 
@@ -129,7 +139,8 @@ import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
                     if (xff != null) remoteIp = xff.split(",")[0].trim();
                 }
                 if (remoteIp == null) remoteIp = ctx.channel().remoteAddress() != null ? ctx.channel().remoteAddress().toString() : "unknown";
-                logger.info("websocket handshake accepted: userId={} channelId={} remote={} path={}", u.userId, ctx.channel().id(), remoteIp, path);
+                logger.info("websocket handshake accepted: userId={} channelId={} remote={} path={} traceId={}",
+                        u.userId, ctx.channel().id(), remoteIp, path, traceId);
                 // let the pipeline continue (WebSocketServerProtocolHandler will do handshake)
             }
         }
@@ -146,17 +157,29 @@ import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
      */
     private void writeErrorAndClose(ChannelHandlerContext ctx, HttpResponseStatus status, int code, String msg) {
         try {
+            String traceId = TraceContextSupport.ensureChannelTraceId(ctx.channel(), null, runtimeSettings());
             Map<String,Object> m = new HashMap<>();
             m.put("code", code);
             m.put("msg", msg);
+            m.put("traceId", traceId);
             String body = mapper.writeValueAsString(m);
             FullHttpResponse resp = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, status, Unpooled.copiedBuffer(body, StandardCharsets.UTF_8));
             resp.headers().set(CONTENT_TYPE, "application/json; charset=UTF-8");
             resp.headers().set(HttpHeaderNames.CONTENT_LENGTH, resp.content().readableBytes());
+            if (traceId != null) {
+                resp.headers().set(runtimeSettings().getTraceHeaderName(), traceId);
+            }
             ctx.writeAndFlush(resp).addListener(f -> ctx.close());
         } catch (Exception ex) {
             logger.error("writeErrorAndClose error", ex);
             ctx.close();
         }
+    }
+
+    private RuntimeObservabilitySettings runtimeSettings() {
+        if (runtimeObservabilitySettings != null) {
+            return runtimeObservabilitySettings;
+        }
+        return new RuntimeObservabilitySettings(new ObservabilityProperties());
     }
 }
