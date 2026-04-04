@@ -36,6 +36,7 @@ public class MybatisConfig {
         SqlSessionFactoryBean factoryBean = new SqlSessionFactoryBean();
         factoryBean.setDataSource(dataSource);
         factoryBean.setTypeAliasesPackage("com.ming.imchatserver.dao");
+        //绑定数据源
         factoryBean.setPlugins(pageInterceptor());
         factoryBean.setMapperLocations(
                 new PathMatchingResourcePatternResolver().getResources("classpath*:/mapper/**/*.xml")
@@ -44,7 +45,7 @@ public class MybatisConfig {
     }
 
     /**
-     * 创建 SqlSessionTemplate。
+     * 创建 线程安全的SqlSessionTemplate。
      */
     @Bean
     public SqlSessionTemplate sqlSessionTemplate(SqlSessionFactory sqlSessionFactory) {

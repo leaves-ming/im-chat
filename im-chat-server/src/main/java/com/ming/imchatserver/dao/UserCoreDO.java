@@ -6,6 +6,7 @@ import java.util.Date;
 
 /**
  * 用户核心信息实体（映射 user_core 表）。
+ * @author ming
  */
 @Data
 public class UserCoreDO {

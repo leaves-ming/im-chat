@@ -32,6 +32,11 @@ public class AsyncEventConfig {
         return executor;
     }
 
+    /**
+     * 群消息推送专用线程池
+     * @param properties
+     * @return
+     */
     @Bean(name = "groupPushExecutor")
     public Executor groupPushExecutor(NettyProperties properties) {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();

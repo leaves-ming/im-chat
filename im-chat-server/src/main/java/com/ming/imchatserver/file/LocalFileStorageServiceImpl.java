@@ -13,13 +13,17 @@ import java.util.Locale;
 
 /**
  * 本地文件存储实现。
+ * @author ming
  */
 @Service
-public class LocalFileStorageService implements FileStorageService {
+public class LocalFileStorageServiceImpl implements FileStorageService {
+
+    private static final String UNIX_PATH_SEPARATOR = "/";
+    private static final String WINDOWS_PATH_SEPARATOR = "\\";
 
     private final FileStorageProperties properties;
 
-    public LocalFileStorageService(FileStorageProperties properties) {
+    public LocalFileStorageServiceImpl(FileStorageProperties properties) {
         this.properties = properties;
     }
 
@@ -50,7 +54,7 @@ public class LocalFileStorageService implements FileStorageService {
     public static String sanitizeFileName(String originalFileName) {
         String candidate = originalFileName == null ? "file" : Paths.get(originalFileName).getFileName().toString();
         candidate = candidate.replace("\\", "_").replace("/", "_");
-        candidate = candidate.replaceAll("[\\p{Cntrl}]", "");
+        candidate = candidate.replaceAll("\\p{Cntrl}", "");
         candidate = candidate.replaceAll("\\s+", "_");
         candidate = candidate.replaceAll("[^A-Za-z0-9._-]", "_");
         if (candidate.isBlank()) {
@@ -78,8 +82,8 @@ public class LocalFileStorageService implements FileStorageService {
         if (storageKey == null || storageKey.isBlank()) {
             throw new IllegalArgumentException("storageKey must not be blank");
         }
-        String normalized = storageKey.replace("\\", "/");
-        while (normalized.startsWith("/")) {
+        String normalized = storageKey.replace(WINDOWS_PATH_SEPARATOR, UNIX_PATH_SEPARATOR);
+        while (normalized.startsWith(UNIX_PATH_SEPARATOR)) {
             normalized = normalized.substring(1);
         }
         Path base = Path.of(properties.getLocalBaseDir()).toAbsolutePath().normalize();

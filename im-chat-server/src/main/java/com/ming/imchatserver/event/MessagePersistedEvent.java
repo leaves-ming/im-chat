@@ -1,6 +1,7 @@
 package com.ming.imchatserver.event;
 
 import io.netty.channel.Channel;
+import lombok.Getter;
 import org.springframework.context.ApplicationEvent;
 
 /**
@@ -8,6 +9,7 @@ import org.springframework.context.ApplicationEvent;
  * <p>
  * 在消息成功落库后发布，用于异步触发推送逻辑，实现“存储/推送”解耦。
  */
+@Getter
 public class MessagePersistedEvent extends ApplicationEvent {
 
     private final Channel senderChannel;
@@ -40,29 +42,5 @@ public class MessagePersistedEvent extends ApplicationEvent {
         this.clientMsgId = clientMsgId;
         this.serverMsgId = serverMsgId;
         this.content = content;
-    }
-
-    public Channel getSenderChannel() {
-        return senderChannel;
-    }
-
-    public Long getFromUserId() {
-        return fromUserId;
-    }
-
-    public Long getToUserId() {
-        return toUserId;
-    }
-
-    public String getClientMsgId() {
-        return clientMsgId;
-    }
-
-    public String getServerMsgId() {
-        return serverMsgId;
-    }
-
-    public String getContent() {
-        return content;
     }
 }

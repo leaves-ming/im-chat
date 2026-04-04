@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * 群聊分发消费者：消费 MQ 后推送当前节点上的在线成员。
+ * @author ming
  */
 @Component
 @RocketMQMessageListener(

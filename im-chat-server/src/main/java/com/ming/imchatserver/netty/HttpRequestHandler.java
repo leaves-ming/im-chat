@@ -9,7 +9,7 @@ import com.ming.imchatserver.config.RateLimitProperties;
 import com.ming.imchatserver.file.FileAccessDeniedException;
 import com.ming.imchatserver.file.FileMetadata;
 import com.ming.imchatserver.file.FileNotFoundBizException;
-import com.ming.imchatserver.file.LocalFileStorageService;
+import com.ming.imchatserver.file.LocalFileStorageServiceImpl;
 import com.ming.imchatserver.file.StoredFileResource;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.service.AuthService;
@@ -218,7 +218,7 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
                 return;
             }
 
-            String sanitizedName = LocalFileStorageService.sanitizeFileName(upload.getFilename());
+            String sanitizedName = LocalFileStorageServiceImpl.sanitizeFileName(upload.getFilename());
             long fileSize = upload.length();
             if (fileSize <= 0L) {
                 writeJson(ctx, "{\"code\":400,\"msg\":\"file must not be empty\"}", HttpResponseStatus.BAD_REQUEST);
@@ -329,12 +329,12 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
             return;
         }
 
-        RandomAccessFile raf = new RandomAccessFile(resource.getPath().toFile(), "r");
+        RandomAccessFile raf = new RandomAccessFile(resource.path().toFile(), "r");
         DefaultHttpResponse response = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
-        response.headers().set(CONTENT_TYPE, resource.getContentType());
-        response.headers().set(HttpHeaderNames.CONTENT_DISPOSITION, "inline; filename=\"" + resource.getFileName() + "\"");
+        response.headers().set(CONTENT_TYPE, resource.contentType());
+        response.headers().set(HttpHeaderNames.CONTENT_DISPOSITION, "inline; filename=\"" + resource.fileName() + "\"");
         response.headers().set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED);
-        HttpUtil.setContentLength(response, resource.getSize());
+        HttpUtil.setContentLength(response, resource.size());
 
         ctx.write(response);
         ctx.write(new HttpChunkedInput(new ChunkedNioFile(raf.getChannel())))
@@ -345,7 +345,7 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
                         logger.warn("close file failed", ex);
                     }
                     if (!future.isSuccess()) {
-                        logger.warn("stream file failed fileName={}", resource.getFileName(), future.cause());
+                        logger.warn("stream file failed fileName={}", resource.fileName(), future.cause());
                     }
                 });
         ctx.writeAndFlush(LastHttpContent.EMPTY_LAST_CONTENT).addListener(ChannelFutureListener.CLOSE);
@@ -392,7 +392,7 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
 
     private boolean isAllowedExtension(String fileName) {
         List<String> allowed = fileStorageProperties.getAllowedExtensions();
-        String extension = LocalFileStorageService.extractExtension(fileName);
+        String extension = LocalFileStorageServiceImpl.extractExtension(fileName);
         return allowed == null || allowed.isEmpty() || allowed.stream().anyMatch(v -> v.equalsIgnoreCase(extension));
     }
 

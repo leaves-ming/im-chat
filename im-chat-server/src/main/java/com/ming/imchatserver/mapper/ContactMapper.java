@@ -11,6 +11,7 @@ import java.util.List;
 
 /**
  * 联系人表（im_contact）访问接口。
+ * @author ming
  */
 @Mapper
 public interface ContactMapper {

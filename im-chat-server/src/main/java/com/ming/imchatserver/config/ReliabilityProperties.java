@@ -6,7 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * 可靠性与 MQ 分发配置。
+ * outbox可靠性与 MQ 分发配置。
  */
 @Component
 @ConfigurationProperties(prefix = "im.reliability")

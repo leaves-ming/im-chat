@@ -17,6 +17,7 @@ import java.util.Collection;
  * 消息推送事件监听器。
  * <p>
  * 监听 {@link MessagePersistedEvent}，异步执行消息下发，并向发送端回写 DELIVER_ACK。
+ * @author ming
  */
 @Component
 public class MessagePushEventListener {
@@ -52,6 +53,7 @@ public class MessagePushEventListener {
 
             Collection<Channel> targets = channelUserManager.getChannels(event.getToUserId());
             if (targets.isEmpty()) {
+                //TODO 常量
                 writeSenderAck(event, "TARGET_OFFLINE");
                 logger.info("deliver queued - target offline: from={} to={} clientMsgId={} serverMsgId={}",
                         event.getFromUserId(), event.getToUserId(), event.getClientMsgId(), event.getServerMsgId());

@@ -9,7 +9,7 @@ import com.ming.imchatserver.file.FileAccessDeniedException;
 import com.ming.imchatserver.file.FileMetadata;
 import com.ming.imchatserver.file.FileNotFoundBizException;
 import com.ming.imchatserver.file.FileStorageService;
-import com.ming.imchatserver.file.LocalFileStorageService;
+import com.ming.imchatserver.file.LocalFileStorageServiceImpl;
 import com.ming.imchatserver.file.StoredFileResource;
 import com.ming.imchatserver.mapper.FileRecordMapper;
 import com.ming.imchatserver.mapper.GroupMessageMapper;
@@ -39,6 +39,7 @@ import java.util.UUID;
 
 /**
  * 文件服务实现。
+ * @author ming
  */
 @Service
 public class FileServiceImpl implements FileService {
@@ -86,7 +87,7 @@ public class FileServiceImpl implements FileService {
         if (size <= 0L) {
             throw new IllegalArgumentException("size must be greater than 0");
         }
-        String sanitizedName = LocalFileStorageService.sanitizeFileName(originalFileName);
+        String sanitizedName = LocalFileStorageServiceImpl.sanitizeFileName(originalFileName);
         String normalizedContentType = normalizeContentType(contentType);
         String fileId = UUID.randomUUID().toString().replace("-", "");
         String storageKey = buildStorageKey(sanitizedName);
@@ -228,7 +229,7 @@ public class FileServiceImpl implements FileService {
     }
 
     private String buildStorageKey(String fileName) {
-        String ext = LocalFileStorageService.extractExtension(fileName);
+        String ext = LocalFileStorageServiceImpl.extractExtension(fileName);
         String datePath = LocalDate.now().format(STORAGE_DATE);
         String suffix = ext.isBlank() ? "" : "." + ext.toLowerCase(Locale.ROOT);
         return datePath + "/" + UUID.randomUUID().toString().replace("-", "") + suffix;

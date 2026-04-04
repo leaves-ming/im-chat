@@ -4,6 +4,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * 统一构造 Redis key。
+ * @author maing
  */
 @Component
 public class RedisKeyFactory {

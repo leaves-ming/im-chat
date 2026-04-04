@@ -59,7 +59,7 @@ public class ContactServiceImpl implements ContactService {
         List<ContactDO> fetched = contactMapper.pageActiveContacts(ownerUserId, cursor, pageSize + 1);
         boolean hasMore = fetched.size() > pageSize;
         List<ContactDO> items = hasMore ? new ArrayList<>(fetched.subList(0, pageSize)) : fetched;
-        Long nextCursor = items.isEmpty() ? null : items.get(items.size() - 1).getPeerUserId();
+        Long nextCursor = items.isEmpty() ? null : items.getLast().getPeerUserId();
         return new ContactPageResult(items, nextCursor, hasMore);
     }
 

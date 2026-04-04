@@ -23,7 +23,16 @@ import java.util.Collection;
 import static com.ming.imchatserver.message.RecallProtocolSupport.STATUS_RETRACTED;
 
 /**
- * 消息分发落地服务：把 MQ 消息推送到在线用户。
+ * 消息分发落地服务。
+ *
+ * <p>该组件消费可靠投递链路产生的分发负载，并将其转换为 WebSocket 协议消息后推送给当前在线连接。</p>
+ * <p>职责主要包括：</p>
+ * <p>1. 处理单聊消息、单聊撤回、状态通知三类单聊分发事件。</p>
+ * <p>2. 处理群聊消息与群消息撤回事件。</p>
+ * <p>3. 在真正下发前再次查询消息状态，避免已撤回消息被当作普通消息推送。</p>
+ * <p>4. 通过 {@link ChannelUserManager} 将消息扇出到用户的所有在线 Channel。</p>
+ *
+ * <p>该类只负责“在线推送”，离线补拉、MQ 重试等能力由其他组件承担。</p>
  */
 @Component
 
@@ -52,10 +61,24 @@ public class DispatchPushService {
         this.redisStateProperties = redisStateProperties;
     }
 
+    /**
+     * 供精简场景或测试使用的构造器。
+     */
     public DispatchPushService(ChannelUserManager channelUserManager, MessageService messageService) {
         this(channelUserManager, messageService, null, null, null);
     }
 
+    /**
+     * 分发单聊相关事件。
+     *
+     * <p>普通消息会封装成 {@code CHAT_DELIVER} 推送给接收方的所有在线连接；若事件类型为撤回或状态通知，
+     * 则改走对应的专用分支。</p>
+     * <p>在发送普通消息前，会再次查询消息当前状态。若消息已被撤回，则不再发送原消息，而是改发撤回通知，
+     * 避免 MQ 延迟导致的“先撤回后收到原消息”。</p>
+     *
+     * @param payload MQ 下发的分发负载
+     * @throws Exception 序列化或网络写出过程中出现异常
+     */
     public void dispatchSingle(DispatchMessagePayload payload) throws Exception {
         if (DispatchMessagePayload.EVENT_TYPE_RECALL.equalsIgnoreCase(payload.getEventType())) {
             dispatchSingleRecall(payload);
@@ -101,6 +124,12 @@ public class DispatchPushService {
                 payload.getServerMsgId(), payload.getToUserId(), targets.size());
     }
 
+    /**
+     * 分发单聊撤回通知。
+     *
+     * <p>接收方始终需要收到撤回通知；发送方是否需要额外收到一份，取决于该撤回事件是否来自当前节点，
+     * 以避免同一节点上本地处理和 MQ 回流造成重复通知。</p>
+     */
     private void dispatchSingleRecall(DispatchMessagePayload payload) throws Exception {
         int deliveredChannels = 0;
         ObjectNode notify = RecallProtocolSupport.buildSingleRecallNode(mapper, "MSG_RECALL_NOTIFY", payload);
@@ -114,6 +143,9 @@ public class DispatchPushService {
                 payload.getServerMsgId(), payload.getToUserId(), deliveredChannels);
     }
 
+    /**
+     * 向指定用户分发消息状态通知，例如送达、已读等状态变更。
+     */
     private void dispatchStatusNotify(DispatchMessagePayload payload) throws Exception {
         Long notifyUserId = payload.getNotifyUserId();
         if (notifyUserId == null) {
@@ -134,6 +166,15 @@ public class DispatchPushService {
                 payload.getServerMsgId(), notifyUserId, deliveredChannels);
     }
 
+    /**
+     * 分发群聊相关事件。
+     *
+     * <p>普通群消息会封装成 {@code GROUP_MSG_PUSH} 并向群内所有在线成员广播；若事件本身是撤回，
+     * 或数据库中的当前消息状态已经变为撤回，则统一转换为群撤回通知。</p>
+     *
+     * @param payload MQ 下发的群消息分发负载
+     * @throws Exception 序列化或网络写出过程中出现异常
+     */
     public void dispatchGroup(DispatchMessagePayload payload) throws Exception {
         if (payload == null || payload.getGroupId() == null || groupService == null) {
             return;
@@ -165,20 +206,34 @@ public class DispatchPushService {
         fanoutGroup(payload.getGroupId(), mapper.writeValueAsString(deliver), false);
     }
 
+    /**
+     * 构造并广播群消息撤回通知。
+     */
     private void dispatchGroupRecall(DispatchMessagePayload payload) throws Exception {
         fanoutGroup(payload.getGroupId(),
                 mapper.writeValueAsString(RecallProtocolSupport.buildGroupRecallNode(mapper, "GROUP_MSG_RECALL_NOTIFY", payload)),
                 false);
     }
 
+    /**
+     * 判断单聊消息是否已经处于撤回状态。
+     */
     private boolean isRetracted(MessageDO message) {
         return message != null && (STATUS_RETRACTED.equalsIgnoreCase(message.getStatus()) || message.getRetractedAt() != null);
     }
 
+    /**
+     * 判断群消息是否已经处于撤回状态。
+     */
     private boolean isRetracted(GroupMessageDO message) {
         return message != null && (Integer.valueOf(GROUP_STATUS_RETRACTED).equals(message.getStatus()) || message.getRetractedAt() != null);
     }
 
+    /**
+     * 将群消息数据库记录转换为撤回分发负载。
+     *
+     * <p>用于“MQ 收到的是普通推送事件，但数据库中该消息已撤回”的补偿场景。</p>
+     */
     private DispatchMessagePayload buildGroupRecallPayload(GroupMessageDO message, String originServerId) {
         DispatchMessagePayload payload = new DispatchMessagePayload();
         payload.setEventType(DispatchMessagePayload.EVENT_TYPE_RECALL);
@@ -196,6 +251,11 @@ public class DispatchPushService {
         return payload;
     }
 
+    /**
+     * 将群消息核心字段写入协议对象。
+     *
+     * <p>普通消息会写入内容；撤回消息不再下发原始内容，而是写入空值并附带撤回信息。</p>
+     */
     private void writeGroupMessageNode(ObjectNode target,
                                        Long groupId,
                                        Long seq,
@@ -226,6 +286,11 @@ public class DispatchPushService {
         writeNullableLong(target, "retractedBy", retractedBy);
     }
 
+    /**
+     * 向指定用户的所有在线连接扇出一条协议消息。
+     *
+     * @return 实际写出的 Channel 数量
+     */
     private int fanoutToUser(Long userId, ObjectNode payload) throws Exception {
         if (userId == null) {
             return 0;
@@ -241,6 +306,11 @@ public class DispatchPushService {
         return targets.size();
     }
 
+    /**
+     * 向群内所有在线成员广播一条已经序列化好的协议消息。
+     *
+     * <p>{@code skipCurrentNode} 当前未启用，预留给后续跨节点去重或本地节点跳过逻辑。</p>
+     */
     private void fanoutGroup(Long groupId, String payload, boolean skipCurrentNode) {
         int deliveredChannels = 0;
         for (Long userId : groupService.listActiveMemberUserIds(groupId)) {
@@ -253,6 +323,9 @@ public class DispatchPushService {
         logger.info("mq group dispatch delivered groupId={} deliveredChannels={}", groupId, deliveredChannels);
     }
 
+    /**
+     * 判断事件是否由当前服务节点产生。
+     */
     private boolean isOriginServer(String originServerId) {
         if (originServerId == null || redisStateProperties == null || redisStateProperties.getServerId() == null) {
             return false;

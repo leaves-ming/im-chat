@@ -120,7 +120,7 @@ class FileServiceImplTest {
         String sig = queryValue(result.downloadUrl(), "sig");
 
         StoredFileResource first = service.loadBySignedDownloadUrl("f_1", exp, sig);
-        assertEquals("note.txt", first.getFileName());
+        assertEquals("note.txt", first.fileName());
         assertThrows(FileAccessDeniedException.class, () -> service.loadBySignedDownloadUrl("f_1", exp, sig));
     }
 

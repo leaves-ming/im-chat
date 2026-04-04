@@ -6,6 +6,7 @@ import java.util.Date;
 
 /**
  * 聊天消息实体（映射 im_message 表）。
+ * @author ming
  */
 @Data
 public class MessageDO {

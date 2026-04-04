@@ -20,7 +20,7 @@ public interface DeliveryMapper {
               read_at = COALESCE(im_delivery.read_at, VALUES(read_at)),
               updated_at = NOW()
             """)
-    int upsertAck(@Param("messageId") Long messageId,
+    void upsertAck(@Param("messageId") Long messageId,
                   @Param("userId") Long userId,
                   @Param("deliveredAt") Date deliveredAt,
                   @Param("readAt") Date readAt);

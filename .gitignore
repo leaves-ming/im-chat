@@ -3,15 +3,16 @@ target/
 !**/src/main/**/target/
 !**/src/test/**/target/
 .kotlin
-/docs
-im_roadmap.md
+
+### Markdown / Docs ###
+*.md
+!README.md
+!**/README.md
+/docs/
+/.github/
 
 ### IntelliJ IDEA ###
-.idea/modules.xml
-.idea/jarRepositories.xml
-.idea/compiler.xml
-.idea/libraries/
-.idea
+/.idea/
 *.iws
 *.iml
 *.ipr

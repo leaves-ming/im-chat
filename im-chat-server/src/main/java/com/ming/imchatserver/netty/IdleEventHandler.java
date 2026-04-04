@@ -30,7 +30,6 @@ import org.slf4j.LoggerFactory;
     /**
      * 处理 Netty 触发的用户事件，重点处理空闲事件。
      */
-    
     public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
         if (evt instanceof IdleStateEvent e) {
             if (e.state() == IdleState.READER_IDLE) {
@@ -53,7 +52,6 @@ import org.slf4j.LoggerFactory;
     /**
      * 发生异常时关闭连接并清理绑定关系。
      */
-    
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
         Long userId = ctx.channel().attr(NettyAttr.USER_ID).get();
         logger.error("exception on channel {} userId={}, closing", ctx.channel().id(), userId, cause);

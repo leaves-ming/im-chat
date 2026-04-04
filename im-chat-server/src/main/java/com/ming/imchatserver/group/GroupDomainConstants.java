@@ -2,6 +2,7 @@ package com.ming.imchatserver.group;
 
 /**
  * 群聊领域常量定义。
+ * @author ming
  */
 public final class GroupDomainConstants {
 
