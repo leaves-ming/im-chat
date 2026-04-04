@@ -10,7 +10,11 @@
     <packaging>pom</packaging>
     <modules>
         <module>im-tools</module>
+        <module>im-api-contract</module>
         <module>im-chat-server</module>
+        <module>im-message-service</module>
+        <module>im-social-service</module>
+        <module>im-user-service</module>
     </modules>
 <!-- springboot版本-->
     <parent>

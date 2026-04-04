@@ -1,5 +1,7 @@
 package com.ming.imchatserver.netty;
 
+import com.ming.imchatserver.application.facade.AuthFacade;
+import com.ming.imchatserver.application.facade.MessageFacade;
 import com.ming.imchatserver.config.FileStorageProperties;
 import com.ming.imchatserver.config.InstanceProperties;
 import com.ming.imchatserver.config.NettyProperties;
@@ -67,6 +69,8 @@ public class NettyWebSocketServer {
     private final InstanceProperties instanceProperties;
     private final Executor wsBusinessExecutor;
     private final WsRouteProperties wsRouteProperties;
+    private final MessageFacade messageFacade;
+    private final AuthFacade authFacade;
 
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
@@ -101,6 +105,8 @@ public class NettyWebSocketServer {
                                 RuntimeObservabilitySettings runtimeObservabilitySettings,
                                 HealthEndpoint healthEndpoint,
                                 InstanceProperties instanceProperties,
+                                MessageFacade messageFacade,
+                                AuthFacade authFacade,
                                 @Qualifier("imWsBusinessExecutor") Executor wsBusinessExecutor,
                                 WsRouteProperties wsRouteProperties) {
         this.properties = properties;
@@ -123,6 +129,8 @@ public class NettyWebSocketServer {
         this.runtimeObservabilitySettings = runtimeObservabilitySettings;
         this.healthEndpoint = healthEndpoint;
         this.instanceProperties = instanceProperties;
+        this.messageFacade = messageFacade;
+        this.authFacade = authFacade;
         this.wsBusinessExecutor = wsBusinessExecutor;
         this.wsRouteProperties = wsRouteProperties;
     }
@@ -145,6 +153,7 @@ public class NettyWebSocketServer {
                         fileService, fileStorageProperties, groupPushExecutor, groupPushCoordinator,
                         idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
                         runtimeObservabilitySettings, healthEndpoint, instanceProperties,
+                        messageFacade, authFacade,
                         wsBusinessExecutor, wsRouteProperties));
         serverChannel = b.bind().sync().channel();
         logger.info("Netty server started and listening on {}", properties.getPort());

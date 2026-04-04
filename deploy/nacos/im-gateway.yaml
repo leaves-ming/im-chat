@@ -1,0 +1,14 @@
+spring:
+  cloud:
+    openfeign:
+      sentinel:
+        enabled: true
+
+im:
+  route:
+    message:
+      remote-enabled: true
+      fallback-to-local-on-error: true
+
+# 预留给后续 im-chat-server -> im-gateway 演进阶段使用。
+# 当前仓库尚未新增独立 im-gateway 模块，此文件仅固定 dataId 命名。

@@ -1,4 +1,4 @@
-package com.ming.imchatserver;
+package com.ming.immessageservice;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -8,23 +8,14 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * IM 聊天服务启动入口。
- * <p>
- * 负责引导 Spring Boot 容器启动，并触发后续 Netty 组件初始化。
+ * 消息域独立服务启动入口。
  */
-@SpringBootApplication(excludeName = {
-        "org.redisson.spring.starter.RedissonAutoConfigurationV2"
-})
 @EnableFeignClients
-public class ImChatServerApplication {
+@SpringBootApplication
+public class ImMessageServiceApplication {
 
-    /**
-     * 应用主函数。
-     *
-     * @param args 启动参数
-     */
     public static void main(String[] args) {
-        SpringApplication application = new SpringApplication(ImChatServerApplication.class);
+        SpringApplication application = new SpringApplication(ImMessageServiceApplication.class);
         Map<String, Object> defaults = new HashMap<>();
         defaults.put("im.instance.startup-time", Long.toString(System.currentTimeMillis()));
         application.setDefaultProperties(defaults);

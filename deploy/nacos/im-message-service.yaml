@@ -1,0 +1,34 @@
+logging:
+  level:
+    root: INFO
+    com.ming.immessageservice: INFO
+
+spring:
+  cloud:
+    openfeign:
+      sentinel:
+        enabled: true
+    nacos:
+      discovery:
+        metadata:
+          version: ${IM_INSTANCE_VERSION:1.0.0-SNAPSHOT}
+          zone: ${IM_INSTANCE_ZONE:default}
+          protocol: http
+          startupTime: ${IM_INSTANCE_STARTUP_TIME:unknown}
+    sentinel:
+      enabled: true
+      eager: true
+      transport:
+        dashboard: ${IM_SENTINEL_DASHBOARD:127.0.0.1:8858}
+        port: ${IM_SENTINEL_PORT:8720}
+
+server:
+  port: ${SERVER_PORT:8081}
+
+im:
+  instance:
+    version: ${IM_INSTANCE_VERSION:1.0.0-SNAPSHOT}
+    zone: ${IM_INSTANCE_ZONE:default}
+    protocol: http
+  message-service:
+    offline-pull-max-limit: 200

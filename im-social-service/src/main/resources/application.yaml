@@ -1,0 +1,94 @@
+spring:
+  application:
+    name: im-social-service
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:local}
+  config:
+    import:
+      - optional:nacos:im-shared.yaml?group=${IM_NACOS_SHARED_GROUP:IM_PLATFORM}
+      - optional:nacos:im-social-service.yaml?group=${IM_NACOS_SERVICE_GROUP:IM_SERVICE}
+  cloud:
+    compatibility-verifier:
+      enabled: true
+    nacos:
+      discovery:
+        enabled: ${IM_NACOS_ENABLED:false}
+        server-addr: ${IM_NACOS_SERVER_ADDR:127.0.0.1:8848}
+        namespace: ${IM_NACOS_NAMESPACE:public}
+        group: ${IM_NACOS_DISCOVERY_GROUP:IM_SERVICE}
+        username: ${IM_NACOS_USERNAME:nacos}
+        password: ${IM_NACOS_PASSWORD:nacos}
+        register-enabled: ${IM_NACOS_REGISTER_ENABLED:${IM_NACOS_ENABLED:false}}
+        metadata:
+          version: ${im.instance.version:${IM_INSTANCE_VERSION:1.0.0-SNAPSHOT}}
+          zone: ${im.instance.zone:${IM_INSTANCE_ZONE:default}}
+          protocol: http
+          startupTime: ${im.instance.startup-time:unknown}
+      config:
+        enabled: ${IM_NACOS_ENABLED:false}
+        server-addr: ${IM_NACOS_SERVER_ADDR:127.0.0.1:8848}
+        namespace: ${IM_NACOS_NAMESPACE:public}
+        group: ${IM_NACOS_SHARED_GROUP:IM_PLATFORM}
+        username: ${IM_NACOS_USERNAME:nacos}
+        password: ${IM_NACOS_PASSWORD:nacos}
+        file-extension: yaml
+        refresh-enabled: false
+    sentinel:
+      enabled: true
+      eager: true
+      transport:
+        dashboard: ${IM_SENTINEL_DASHBOARD:127.0.0.1:8858}
+        port: ${IM_SENTINEL_PORT:8721}
+  datasource:
+    type: com.alibaba.druid.pool.DruidDataSource
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: ${IM_DB_URL:jdbc:mysql://127.0.0.1:3306/im_chat?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai}
+    username: ${IM_DB_USERNAME:root}
+    password: ${IM_DB_PASSWORD:root}
+  data:
+    redis:
+      host: ${IM_REDIS_HOST:127.0.0.1}
+      port: ${IM_REDIS_PORT:6379}
+      password: ${IM_REDIS_PASSWORD:}
+      database: ${IM_REDIS_DATABASE:0}
+      timeout: 3000ms
+
+server:
+  port: ${SERVER_PORT:8083}
+  shutdown: graceful
+
+management:
+  endpoints:
+    enabled-by-default: false
+  endpoint:
+    health:
+      enabled: true
+      show-details: always
+
+mybatis:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.ming.imsocialservice.dao
+  configuration:
+    map-underscore-to-camel-case: true
+    cache-enabled: false
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} traceId=%X{traceId:-na} %msg%n"
+  level:
+    root: INFO
+    com.ming.imsocialservice: INFO
+
+springdoc:
+  api-docs:
+    enabled: false
+
+im:
+  instance:
+    version: ${IM_INSTANCE_VERSION:1.0.0-SNAPSHOT}
+    zone: ${IM_INSTANCE_ZONE:default}
+    protocol: http
+  social-service:
+    default-contact-list-limit: ${IM_SOCIAL_DEFAULT_CONTACT_LIST_LIMIT:50}
+    default-group-member-list-limit: ${IM_SOCIAL_DEFAULT_GROUP_MEMBER_LIST_LIMIT:50}
+    redis-enabled: ${IM_SOCIAL_REDIS_ENABLED:true}

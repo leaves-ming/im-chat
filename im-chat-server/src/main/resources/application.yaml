@@ -12,6 +12,9 @@ spring:
   cloud:
     compatibility-verifier:
       enabled: true
+    openfeign:
+      sentinel:
+        enabled: true
     nacos:
       discovery:
         enabled: ${IM_NACOS_ENABLED:false}
@@ -35,6 +38,12 @@ spring:
         password: ${IM_NACOS_PASSWORD:nacos}
         file-extension: yaml
         refresh-enabled: false
+    sentinel:
+      enabled: true
+      eager: true
+      transport:
+        dashboard: ${IM_SENTINEL_DASHBOARD:127.0.0.1:8858}
+        port: ${IM_SENTINEL_PORT:8719}
 #        shared-configs:
 #          - data-id: im-shared.yaml
 #            group: ${IM_NACOS_SHARED_GROUP:IM_PLATFORM}
@@ -196,3 +205,7 @@ im:
   metrics:
     sample-fixed-delay-ms: 10000
     log-fixed-delay-ms: 60000
+  route:
+    message:
+      remote-enabled: ${IM_ROUTE_MESSAGE_REMOTE_ENABLED:false}
+      fallback-to-local-on-error: ${IM_ROUTE_MESSAGE_FALLBACK_TO_LOCAL_ON_ERROR:true}
