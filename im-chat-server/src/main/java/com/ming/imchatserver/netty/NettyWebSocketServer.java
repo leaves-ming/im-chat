@@ -5,6 +5,7 @@ import com.ming.imchatserver.config.InstanceProperties;
 import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.config.RateLimitProperties;
 import com.ming.imchatserver.config.RedisStateProperties;
+import com.ming.imchatserver.config.WsRouteProperties;
 import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.observability.RuntimeObservabilitySettings;
@@ -64,6 +65,8 @@ public class NettyWebSocketServer {
     private final RuntimeObservabilitySettings runtimeObservabilitySettings;
     private final HealthEndpoint healthEndpoint;
     private final InstanceProperties instanceProperties;
+    private final Executor wsBusinessExecutor;
+    private final WsRouteProperties wsRouteProperties;
 
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
@@ -97,7 +100,9 @@ public class NettyWebSocketServer {
                                 RedisStateProperties redisStateProperties,
                                 RuntimeObservabilitySettings runtimeObservabilitySettings,
                                 HealthEndpoint healthEndpoint,
-                                InstanceProperties instanceProperties) {
+                                InstanceProperties instanceProperties,
+                                @Qualifier("imWsBusinessExecutor") Executor wsBusinessExecutor,
+                                WsRouteProperties wsRouteProperties) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
@@ -118,6 +123,8 @@ public class NettyWebSocketServer {
         this.runtimeObservabilitySettings = runtimeObservabilitySettings;
         this.healthEndpoint = healthEndpoint;
         this.instanceProperties = instanceProperties;
+        this.wsBusinessExecutor = wsBusinessExecutor;
+        this.wsRouteProperties = wsRouteProperties;
     }
 
     @EventListener(ApplicationReadyEvent.class)    /**
@@ -137,7 +144,8 @@ public class NettyWebSocketServer {
                         contactService, groupService, groupMessageService, deliveryMapper, metricsService,
                         fileService, fileStorageProperties, groupPushExecutor, groupPushCoordinator,
                         idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
-                        runtimeObservabilitySettings, healthEndpoint, instanceProperties));
+                        runtimeObservabilitySettings, healthEndpoint, instanceProperties,
+                        wsBusinessExecutor, wsRouteProperties));
         serverChannel = b.bind().sync().channel();
         logger.info("Netty server started and listening on {}", properties.getPort());
     }

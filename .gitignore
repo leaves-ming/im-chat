@@ -43,3 +43,6 @@ build/
 .DS_Store
 
 .yml
+
+/reports/
+/scripts

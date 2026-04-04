@@ -5,6 +5,7 @@ import com.ming.imchatserver.config.InstanceProperties;
 import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.config.RateLimitProperties;
 import com.ming.imchatserver.config.RedisStateProperties;
+import com.ming.imchatserver.config.WsRouteProperties;
 import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.observability.RuntimeObservabilitySettings;
@@ -51,6 +52,8 @@ import java.util.concurrent.Executor;
     private final RuntimeObservabilitySettings runtimeObservabilitySettings;
     private final HealthEndpoint healthEndpoint;
     private final InstanceProperties instanceProperties;
+    private final Executor wsBusinessExecutor;
+    private final WsRouteProperties wsRouteProperties;
     /**
      * 创建 Channel 初始化器，并注入各业务 Handler 所需依赖。
      */
@@ -74,7 +77,9 @@ import java.util.concurrent.Executor;
                                   RedisStateProperties redisStateProperties,
                                   RuntimeObservabilitySettings runtimeObservabilitySettings,
                                   HealthEndpoint healthEndpoint,
-                                  InstanceProperties instanceProperties) {
+                                  InstanceProperties instanceProperties,
+                                  Executor wsBusinessExecutor,
+                                  WsRouteProperties wsRouteProperties) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
@@ -95,6 +100,8 @@ import java.util.concurrent.Executor;
         this.runtimeObservabilitySettings = runtimeObservabilitySettings;
         this.healthEndpoint = healthEndpoint;
         this.instanceProperties = instanceProperties;
+        this.wsBusinessExecutor = wsBusinessExecutor;
+        this.wsRouteProperties = wsRouteProperties;
     }
 
     @Override
@@ -123,7 +130,10 @@ import java.util.concurrent.Executor;
         ch.pipeline().addLast(new WebSocketServerProtocolHandler(properties.getWebsocketPath(), null, true, properties.getMaxContentLength()));
         // 业务帧鉴权（要求 channel 已绑定 userId）
         ch.pipeline().addLast(new WsBusinessAuthHandler(channelUserManager));
-        ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, properties, deliveryMapper, metricsService, groupPushExecutor, groupPushCoordinator, idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties));
+        ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService,
+                properties, deliveryMapper, metricsService, groupPushExecutor, groupPushCoordinator,
+                idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
+                wsBusinessExecutor, wsRouteProperties));
         ch.pipeline().addLast(new IdleEventHandler(channelUserManager));
     }
 }

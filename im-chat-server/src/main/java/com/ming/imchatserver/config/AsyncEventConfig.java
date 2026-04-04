@@ -49,4 +49,19 @@ public class AsyncEventConfig {
         executor.initialize();
         return executor;
     }
+
+    /**
+     * WebSocket 网关业务线程池。
+     */
+    @Bean(name = "imWsBusinessExecutor")
+    public Executor imWsBusinessExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        int processors = Math.max(4, Runtime.getRuntime().availableProcessors());
+        executor.setCorePoolSize(processors);
+        executor.setMaxPoolSize(processors * 2);
+        executor.setQueueCapacity(2000);
+        executor.setThreadNamePrefix("im-ws-biz-");
+        executor.initialize();
+        return executor;
+    }
 }
