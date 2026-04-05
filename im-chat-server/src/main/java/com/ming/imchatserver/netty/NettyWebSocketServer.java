@@ -3,7 +3,6 @@ package com.ming.imchatserver.netty;
 import com.ming.imchatserver.application.facade.AuthFacade;
 import com.ming.imchatserver.application.facade.MessageFacade;
 import com.ming.imchatserver.application.facade.SocialFacade;
-import com.ming.imchatserver.config.FileStorageProperties;
 import com.ming.imchatserver.config.InstanceProperties;
 import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.config.RateLimitProperties;
@@ -11,7 +10,6 @@ import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.observability.RuntimeObservabilitySettings;
 import com.ming.imchatserver.service.AuthService;
-import com.ming.imchatserver.service.FileService;
 import com.ming.imchatserver.service.IdempotencyService;
 import com.ming.imchatserver.service.RateLimitService;
 import io.netty.bootstrap.ServerBootstrap;
@@ -48,8 +46,6 @@ public class NettyWebSocketServer {
     private final ChannelUserManager channelUserManager;
     private final SocialFacade socialFacade;
     private final MetricsService metricsService;
-    private final FileService fileService;
-    private final FileStorageProperties fileStorageProperties;
     private final Executor groupPushExecutor;
     private final GroupPushCoordinator groupPushCoordinator;
     private final IdempotencyService idempotencyService;
@@ -80,8 +76,6 @@ public class NettyWebSocketServer {
                                 ChannelUserManager channelUserManager,
                                 SocialFacade socialFacade,
                                 MetricsService metricsService,
-                                FileService fileService,
-                                FileStorageProperties fileStorageProperties,
                                 @Qualifier("groupPushExecutor") Executor groupPushExecutor,
                                 GroupPushCoordinator groupPushCoordinator,
                                 IdempotencyService idempotencyService,
@@ -99,8 +93,6 @@ public class NettyWebSocketServer {
         this.channelUserManager = channelUserManager;
         this.socialFacade = socialFacade;
         this.metricsService = metricsService;
-        this.fileService = fileService;
-        this.fileStorageProperties = fileStorageProperties;
         this.groupPushExecutor = groupPushExecutor;
         this.groupPushCoordinator = groupPushCoordinator;
         this.idempotencyService = idempotencyService;
@@ -130,7 +122,7 @@ public class NettyWebSocketServer {
                 .localAddress(new InetSocketAddress(properties.getPort()))
                 .childHandler(new NettyServerInitializer(properties, authService, channelUserManager,
                         socialFacade, metricsService,
-                        fileService, fileStorageProperties, groupPushExecutor, groupPushCoordinator,
+                        groupPushExecutor, groupPushCoordinator,
                         idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
                         runtimeObservabilitySettings, healthEndpoint, instanceProperties,
                         messageFacade, authFacade,
