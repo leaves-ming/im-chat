@@ -6,18 +6,13 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * social 远程调用路由与缓存配置。
+ * social 远程调用缓存配置。
  */
 @Component
-@ConfigurationProperties(prefix = "im.route.social")
+@ConfigurationProperties(prefix = "route.social")
 @Getter
 @Setter
 public class SocialRouteProperties {
-
-    /**
-     * 是否启用 social 远程路由。
-     */
-    private boolean remoteEnabled = true;
 
     /**
      * 单聊权限缓存 TTL，单位秒。

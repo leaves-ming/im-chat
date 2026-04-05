@@ -7,8 +7,6 @@ import com.ming.imchatserver.config.InstanceProperties;
 import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.config.RateLimitProperties;
 import com.ming.imchatserver.config.RedisStateProperties;
-import com.ming.imchatserver.config.WsRouteProperties;
-import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.observability.RuntimeObservabilitySettings;
 import com.ming.imchatserver.service.AuthService;
@@ -40,7 +38,6 @@ import java.util.concurrent.Executor;
     private final ContactService contactService;
     private final GroupService groupService;
     private final GroupMessageService groupMessageService;
-    private final DeliveryMapper deliveryMapper;
     private final MetricsService metricsService;
     private final FileService fileService;
     private final FileStorageProperties fileStorageProperties;
@@ -54,7 +51,6 @@ import java.util.concurrent.Executor;
     private final HealthEndpoint healthEndpoint;
     private final InstanceProperties instanceProperties;
     private final Executor wsBusinessExecutor;
-    private final WsRouteProperties wsRouteProperties;
     private final MessageFacade messageFacade;
     private final AuthFacade authFacadeFacade;
     /**
@@ -67,7 +63,6 @@ import java.util.concurrent.Executor;
                                   ContactService contactService,
                                   GroupService groupService,
                                   GroupMessageService groupMessageService,
-                                  DeliveryMapper deliveryMapper,
                                   MetricsService metricsService,
                                   FileService fileService,
                                   FileStorageProperties fileStorageProperties,
@@ -82,15 +77,13 @@ import java.util.concurrent.Executor;
                                   InstanceProperties instanceProperties,
                                   MessageFacade messageFacade,
                                   AuthFacade authFacade,
-                                  Executor wsBusinessExecutor,
-                                  WsRouteProperties wsRouteProperties) {
+                                  Executor wsBusinessExecutor) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
         this.contactService = contactService;
         this.groupService = groupService;
         this.groupMessageService = groupMessageService;
-        this.deliveryMapper = deliveryMapper;
         this.metricsService = metricsService;
         this.fileService = fileService;
         this.fileStorageProperties = fileStorageProperties;
@@ -106,7 +99,6 @@ import java.util.concurrent.Executor;
         this.messageFacade = messageFacade;
         this.authFacadeFacade = authFacade;
         this.wsBusinessExecutor = wsBusinessExecutor;
-        this.wsRouteProperties = wsRouteProperties;
     }
 
     @Override
@@ -136,10 +128,10 @@ import java.util.concurrent.Executor;
         // 业务帧鉴权（要求 channel 已绑定 userId）
         ch.pipeline().addLast(new WsBusinessAuthHandler(channelUserManager));
         ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, null, contactService, groupService, groupMessageService,
-                properties, deliveryMapper, metricsService, groupPushExecutor, groupPushCoordinator,
+                properties, metricsService, groupPushExecutor, groupPushCoordinator,
                 idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
                 messageFacade, authFacadeFacade,
-                wsBusinessExecutor, wsRouteProperties));
+                wsBusinessExecutor));
         ch.pipeline().addLast(new IdleEventHandler(channelUserManager));
     }
 }

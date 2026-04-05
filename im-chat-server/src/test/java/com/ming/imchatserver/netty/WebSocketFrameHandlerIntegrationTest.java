@@ -10,10 +10,8 @@ import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imchatserver.dao.ContactDO;
 import com.ming.imchatserver.dao.GroupMessageDO;
 import com.ming.imchatserver.dao.MessageDO;
-import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.metrics.MetricsService;
-import com.ming.imchatserver.netty.GroupPushCoordinator;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
 import com.ming.imchatserver.service.ContactService;
 import com.ming.imchatserver.service.FileTokenBizException;
@@ -70,7 +68,6 @@ class WebSocketFrameHandlerIntegrationTest {
     private ContactService contactService;
     private GroupService groupService;
     private GroupMessageService groupMessageService;
-    private DeliveryMapper deliveryMapper;
     private MetricsService metricsService;
     private NettyProperties nettyProperties;
 
@@ -84,7 +81,6 @@ class WebSocketFrameHandlerIntegrationTest {
         contactService = mock(ContactService.class);
         groupService = mock(GroupService.class);
         groupMessageService = mock(GroupMessageService.class);
-        deliveryMapper = mock(DeliveryMapper.class);
         metricsService = mock(MetricsService.class);
         nettyProperties = new NettyProperties();
         nettyProperties.setSyncBatchSize(2);
@@ -131,7 +127,6 @@ class WebSocketFrameHandlerIntegrationTest {
                 groupService,
                 groupMessageService,
                 nettyProperties,
-                deliveryMapper,
                 metricsService,
                 groupPushExecutor,
                 groupPushCoordinator,
@@ -141,8 +136,7 @@ class WebSocketFrameHandlerIntegrationTest {
                 redisStateProperties,
                 bridgeMessageFacade(),
                 bridgeAuthFacade(),
-                businessExecutor,
-                null
+                businessExecutor
         );
     }
 
@@ -823,7 +817,6 @@ class WebSocketFrameHandlerIntegrationTest {
         assertEquals("FORBIDDEN", out.get(0).get("code").asText());
 
         verify(messageService, never()).updateStatusByServerMsgId(any(), any());
-        verify(deliveryMapper, never()).upsertAck(any(), any(), any(), any());
         verify(channelUserManager, never()).getChannels(anyLong());
         assertTrue(readOutboundJson(senderChannel).isEmpty());
     }

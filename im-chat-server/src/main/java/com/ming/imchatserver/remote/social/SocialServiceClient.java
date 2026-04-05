@@ -32,8 +32,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 @FeignClient(
         name = "im-social-service",
         contextId = "socialServiceClient",
-        path = SocialApiPaths.BASE,
-        fallbackFactory = SocialServiceClientFallbackFactory.class
+        path = SocialApiPaths.BASE
 )
 public interface SocialServiceClient {
 

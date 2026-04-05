@@ -11,9 +11,7 @@ import com.ming.imchatserver.application.facade.impl.SocialFacadeImpl;
 import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.config.RateLimitProperties;
 import com.ming.imchatserver.config.RedisStateProperties;
-import com.ming.imchatserver.config.WsRouteProperties;
 import com.ming.imchatserver.dao.MessageDO;
-import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.observability.TraceContextSupport;
 import com.ming.imchatserver.service.ContactService;
@@ -66,10 +64,9 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
                                  GroupService groupService,
                                  GroupMessageService groupMessageService,
                                  NettyProperties nettyProperties,
-                                 DeliveryMapper deliveryMapper,
                                  MetricsService metricsService) {
         this(channelUserManager, messageService, contactService, groupService, groupMessageService,
-                nettyProperties, deliveryMapper, metricsService, null, null, null, null, null, null, null, null);
+                nettyProperties, metricsService, null, null, null, null, null, null, null, null, null);
     }
 
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
@@ -78,11 +75,10 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
                                  GroupService groupService,
                                  GroupMessageService groupMessageService,
                                  NettyProperties nettyProperties,
-                                 DeliveryMapper deliveryMapper,
                                  MetricsService metricsService,
                                  Executor groupPushExecutor) {
         this(channelUserManager, messageService, contactService, groupService, groupMessageService,
-                nettyProperties, deliveryMapper, metricsService, groupPushExecutor, null, null, null, null, null, null, null);
+                nettyProperties, metricsService, groupPushExecutor, null, null, null, null, null, null, null, null);
     }
 
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
@@ -91,13 +87,12 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
                                  GroupService groupService,
                                  GroupMessageService groupMessageService,
                                  NettyProperties nettyProperties,
-                                 DeliveryMapper deliveryMapper,
                                  MetricsService metricsService,
                                  Executor groupPushExecutor,
                                  GroupPushCoordinator groupPushCoordinator) {
         this(channelUserManager, messageService, contactService, groupService, groupMessageService,
-                nettyProperties, deliveryMapper, metricsService, groupPushExecutor, groupPushCoordinator,
-                null, null, null, null, null, null);
+                nettyProperties, metricsService, groupPushExecutor, groupPushCoordinator,
+                null, null, null, null, null, null, null);
     }
 
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
@@ -106,7 +101,6 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
                                  GroupService groupService,
                                  GroupMessageService groupMessageService,
                                  NettyProperties nettyProperties,
-                                 DeliveryMapper deliveryMapper,
                                  MetricsService metricsService,
                                  Executor groupPushExecutor,
                                  GroupPushCoordinator groupPushCoordinator,
@@ -115,9 +109,9 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
                                  RateLimitProperties rateLimitProperties,
                                  RedisStateProperties redisStateProperties) {
         this(channelUserManager, messageService, contactService, groupService, groupMessageService,
-                nettyProperties, deliveryMapper, metricsService, groupPushExecutor, groupPushCoordinator,
+                nettyProperties, metricsService, groupPushExecutor, groupPushCoordinator,
                 idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
-                null, null, null, null);
+                null, null, null);
     }
 
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
@@ -126,7 +120,6 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
                                  GroupService groupService,
                                  GroupMessageService groupMessageService,
                                  NettyProperties nettyProperties,
-                                 DeliveryMapper deliveryMapper,
                                  MetricsService metricsService,
                                  Executor groupPushExecutor,
                                  GroupPushCoordinator groupPushCoordinator,
@@ -134,12 +127,11 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
                                  RateLimitService rateLimitService,
                                  RateLimitProperties rateLimitProperties,
                                  RedisStateProperties redisStateProperties,
-                                 Executor businessExecutor,
-                                 WsRouteProperties routeProperties) {
+                                 Executor businessExecutor) {
         this(channelUserManager, messageService, contactService, groupService, groupMessageService,
-                nettyProperties, deliveryMapper, metricsService, groupPushExecutor, groupPushCoordinator,
+                nettyProperties, metricsService, groupPushExecutor, groupPushCoordinator,
                 idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
-                null, null, businessExecutor, routeProperties);
+                null, null, businessExecutor);
     }
 
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
@@ -148,7 +140,6 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
                                  GroupService groupService,
                                  GroupMessageService groupMessageService,
                                  NettyProperties nettyProperties,
-                                 DeliveryMapper deliveryMapper,
                                  MetricsService metricsService,
                                  Executor groupPushExecutor,
                                  GroupPushCoordinator groupPushCoordinator,
@@ -158,8 +149,7 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
                                  RedisStateProperties redisStateProperties,
                                  MessageFacade injectedMessageFacade,
                                  AuthFacade injectedAuthFacade,
-                                 Executor businessExecutor,
-                                 WsRouteProperties routeProperties) {
+                                 Executor businessExecutor) {
         this.channelUserManager = channelUserManager;
         this.nettyProperties = nettyProperties;
         this.businessExecutor = businessExecutor == null ? Runnable::run : businessExecutor;
@@ -170,9 +160,7 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
                 channelUserManager, groupPushExecutor, groupPushCoordinator, metricsService,
                 idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties, nettyProperties);
         this.authFacade = Objects.requireNonNull(injectedAuthFacade, "authFacade unavailable");
-        WsRouteProperties effectiveRouteProperties = routeProperties == null ? new WsRouteProperties() : routeProperties;
         this.commandRouter = new WsCommandRouter(
-                effectiveRouteProperties,
                 new ChatCommandHandler(this.messageFacade, socialFacade, nettyProperties, protocolSupport, channelUserManager),
                 new GroupCommandHandler(socialFacade, nettyProperties, protocolSupport),
                 new ContactCommandHandler(socialFacade, nettyProperties, protocolSupport),
@@ -183,9 +171,9 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
                                  MessageService messageService,
                                  NettyProperties nettyProperties,
-                                 DeliveryMapper deliveryMapper) {
-        this(channelUserManager, messageService, null, null, null, nettyProperties, deliveryMapper, null,
-                null, null, null, null, null, null, null, null, null, null);
+                                 MetricsService metricsService) {
+        this(channelUserManager, messageService, null, null, null, nettyProperties, metricsService,
+                null, null, null, null, null, null, null, null, null);
     }
 
     @Override

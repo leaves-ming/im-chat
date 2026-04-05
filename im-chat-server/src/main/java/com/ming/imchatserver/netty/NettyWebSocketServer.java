@@ -7,8 +7,6 @@ import com.ming.imchatserver.config.InstanceProperties;
 import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.config.RateLimitProperties;
 import com.ming.imchatserver.config.RedisStateProperties;
-import com.ming.imchatserver.config.WsRouteProperties;
-import com.ming.imchatserver.mapper.DeliveryMapper;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.observability.RuntimeObservabilitySettings;
 import com.ming.imchatserver.service.AuthService;
@@ -53,7 +51,6 @@ public class NettyWebSocketServer {
     private final ContactService contactService;
     private final GroupService groupService;
     private final GroupMessageService groupMessageService;
-    private final DeliveryMapper deliveryMapper;
     private final MetricsService metricsService;
     private final FileService fileService;
     private final FileStorageProperties fileStorageProperties;
@@ -67,7 +64,6 @@ public class NettyWebSocketServer {
     private final HealthEndpoint healthEndpoint;
     private final InstanceProperties instanceProperties;
     private final Executor wsBusinessExecutor;
-    private final WsRouteProperties wsRouteProperties;
     private final MessageFacade messageFacade;
     private final AuthFacade authFacade;
 
@@ -80,8 +76,7 @@ public class NettyWebSocketServer {
      * @param properties          Netty 相关配置
      * @param authService         认证服务（用于握手阶段）
      * @param channelUserManager  在线连接管理
-     * @param messageService      消息服务
-     * @param deliveryMapper      ACK 持久化组件
+     * @param messageFacade       消息域远程门面
      */
     
     public NettyWebSocketServer(NettyProperties properties,
@@ -90,7 +85,6 @@ public class NettyWebSocketServer {
                                 ContactService contactService,
                                 GroupService groupService,
                                 GroupMessageService groupMessageService,
-                                DeliveryMapper deliveryMapper,
                                 MetricsService metricsService,
                                 FileService fileService,
                                 FileStorageProperties fileStorageProperties,
@@ -105,15 +99,13 @@ public class NettyWebSocketServer {
                                 InstanceProperties instanceProperties,
                                 MessageFacade messageFacade,
                                 AuthFacade authFacade,
-                                @Qualifier("imWsBusinessExecutor") Executor wsBusinessExecutor,
-                                WsRouteProperties wsRouteProperties) {
+                                @Qualifier("imWsBusinessExecutor") Executor wsBusinessExecutor) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
         this.contactService = contactService;
         this.groupService = groupService;
         this.groupMessageService = groupMessageService;
-        this.deliveryMapper = deliveryMapper;
         this.metricsService = metricsService;
         this.fileService = fileService;
         this.fileStorageProperties = fileStorageProperties;
@@ -129,7 +121,6 @@ public class NettyWebSocketServer {
         this.messageFacade = messageFacade;
         this.authFacade = authFacade;
         this.wsBusinessExecutor = wsBusinessExecutor;
-        this.wsRouteProperties = wsRouteProperties;
     }
 
     @EventListener(ApplicationReadyEvent.class)    /**
@@ -146,12 +137,12 @@ public class NettyWebSocketServer {
                 .channel(NioServerSocketChannel.class)
                 .localAddress(new InetSocketAddress(properties.getPort()))
                 .childHandler(new NettyServerInitializer(properties, authService, channelUserManager,
-                        contactService, groupService, groupMessageService, deliveryMapper, metricsService,
+                        contactService, groupService, groupMessageService, metricsService,
                         fileService, fileStorageProperties, groupPushExecutor, groupPushCoordinator,
                         idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
                         runtimeObservabilitySettings, healthEndpoint, instanceProperties,
                         messageFacade, authFacade,
-                        wsBusinessExecutor, wsRouteProperties));
+                        wsBusinessExecutor));
         serverChannel = b.bind().sync().channel();
         logger.info("Netty server started and listening on {}", properties.getPort());
     }

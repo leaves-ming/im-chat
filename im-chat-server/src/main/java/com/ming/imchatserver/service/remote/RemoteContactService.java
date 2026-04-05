@@ -41,19 +41,22 @@ public class RemoteContactService implements SingleChatPermissionCapable {
     }
 
     public ContactService.Result addOrActivateContact(Long ownerUserId, Long peerUserId) {
-        ContactOperateResponse response = unwrap(socialServiceClient.addContact(new ContactOperateRequest(ownerUserId, peerUserId)));
+        ContactOperateResponse response = unwrap(call(() ->
+                socialServiceClient.addContact(new ContactOperateRequest(ownerUserId, peerUserId))));
         socialCacheSupport.invalidateContactPair(ownerUserId, peerUserId);
         return new ContactService.Result(response.success(), response.idempotent());
     }
 
     public ContactService.Result removeOrDeactivateContact(Long ownerUserId, Long peerUserId) {
-        ContactOperateResponse response = unwrap(socialServiceClient.removeContact(new ContactOperateRequest(ownerUserId, peerUserId)));
+        ContactOperateResponse response = unwrap(call(() ->
+                socialServiceClient.removeContact(new ContactOperateRequest(ownerUserId, peerUserId))));
         socialCacheSupport.invalidateContactPair(ownerUserId, peerUserId);
         return new ContactService.Result(response.success(), response.idempotent());
     }
 
     public ContactService.ContactPageResult listActiveContacts(Long ownerUserId, Long cursorPeerUserId, Integer limit) {
-        ContactListResponse response = unwrap(socialServiceClient.listContacts(new ContactListRequest(ownerUserId, cursorPeerUserId, limit)));
+        ContactListResponse response = unwrap(call(() ->
+                socialServiceClient.listContacts(new ContactListRequest(ownerUserId, cursorPeerUserId, limit))));
         List<ContactDO> items = new ArrayList<>();
         for (ContactItemDTO item : response.items()) {
             ContactDO target = new ContactDO();
@@ -74,8 +77,8 @@ public class RemoteContactService implements SingleChatPermissionCapable {
         if (cached != null) {
             return cached;
         }
-        ApiResponse<com.ming.imapicontract.social.CheckContactActiveResponse> response =
-                socialServiceClient.checkContactActive(new CheckContactActiveRequest(ownerUserId, peerUserId));
+        ApiResponse<com.ming.imapicontract.social.CheckContactActiveResponse> response = call(() ->
+                socialServiceClient.checkContactActive(new CheckContactActiveRequest(ownerUserId, peerUserId)));
         if (response != null && response.isSuccess()) {
             boolean active = response.getData() != null && response.getData().active();
             socialCacheSupport.putContactActive(ownerUserId, peerUserId, active, contactActiveCacheTtlMillis());
@@ -93,8 +96,8 @@ public class RemoteContactService implements SingleChatPermissionCapable {
         if (cached != null) {
             return cached;
         }
-        ApiResponse<ValidateSingleChatPermissionResponse> response = socialServiceClient.validateSingleChatPermission(
-                new ValidateSingleChatPermissionRequest(fromUserId, toUserId));
+        ApiResponse<ValidateSingleChatPermissionResponse> response = call(() ->
+                socialServiceClient.validateSingleChatPermission(new ValidateSingleChatPermissionRequest(fromUserId, toUserId)));
         if (response != null && response.isSuccess()) {
             boolean allowed = response.getData() != null && response.getData().allowed();
             socialCacheSupport.putSingleChatPermission(fromUserId, toUserId, allowed, singleChatPermissionCacheTtlMillis());
@@ -135,6 +138,14 @@ public class RemoteContactService implements SingleChatPermissionCapable {
         return response == null || "REMOTE_UNAVAILABLE".equals(response.getCode());
     }
 
+    private <T> ApiResponse<T> call(SocialCall<T> socialCall) {
+        try {
+            return socialCall.execute();
+        } catch (RuntimeException ex) {
+            throw new SocialRpcException("REMOTE_UNAVAILABLE", ex.getMessage());
+        }
+    }
+
     private String messageOf(ApiResponse<?> response, String fallback) {
         return response == null || response.getMessage() == null || response.getMessage().isBlank()
                 ? fallback
@@ -147,5 +158,10 @@ public class RemoteContactService implements SingleChatPermissionCapable {
 
     private long contactActiveCacheTtlMillis() {
         return Duration.ofSeconds(Math.max(1, socialRouteProperties.getContactActiveCacheTtlSeconds())).toMillis();
+    }
+
+    @FunctionalInterface
+    private interface SocialCall<T> {
+        ApiResponse<T> execute();
     }
 }

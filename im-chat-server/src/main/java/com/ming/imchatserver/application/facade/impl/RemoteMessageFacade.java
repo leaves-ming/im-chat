@@ -19,6 +19,7 @@ import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.remote.message.MessageServiceClient;
 import com.ming.imchatserver.service.MessageRecallException;
 import com.ming.imchatserver.service.MessageService;
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -27,6 +28,7 @@ import java.util.List;
 /**
  * MessageFacade 远程实现。
  */
+@Primary
 @Component
 public class RemoteMessageFacade implements MessageFacade {
 

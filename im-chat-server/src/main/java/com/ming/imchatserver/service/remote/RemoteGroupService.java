@@ -47,8 +47,8 @@ public class RemoteGroupService {
     }
 
     public GroupService.CreateGroupResult createGroup(Long ownerUserId, String name, Integer memberLimit) {
-        GroupCreateResponse response = unwrap(socialServiceClient.createGroup(
-                new GroupCreateRequest(ownerUserId, name, memberLimit)));
+        GroupCreateResponse response = unwrap(call(() ->
+                socialServiceClient.createGroup(new GroupCreateRequest(ownerUserId, name, memberLimit))));
         if (response == null) {
             throw new SocialRpcException("REMOTE_UNAVAILABLE", "social service response is null");
         }
@@ -57,20 +57,22 @@ public class RemoteGroupService {
     }
 
     public GroupService.JoinGroupResult joinGroup(Long groupId, Long userId) {
-        GroupJoinResponse response = unwrap(socialServiceClient.joinGroup(new GroupJoinRequest(groupId, userId)));
+        GroupJoinResponse response = unwrap(call(() ->
+                socialServiceClient.joinGroup(new GroupJoinRequest(groupId, userId))));
         socialCacheSupport.invalidateGroup(groupId);
         return new GroupService.JoinGroupResult(response.joined(), response.idempotent());
     }
 
     public GroupService.QuitGroupResult quitGroup(Long groupId, Long userId) {
-        GroupQuitResponse response = unwrap(socialServiceClient.quitGroup(new GroupQuitRequest(groupId, userId)));
+        GroupQuitResponse response = unwrap(call(() ->
+                socialServiceClient.quitGroup(new GroupQuitRequest(groupId, userId))));
         socialCacheSupport.invalidateGroup(groupId);
         return new GroupService.QuitGroupResult(response.quit(), response.idempotent());
     }
 
     public GroupService.MemberPageResult listMembers(Long groupId, Long cursorUserId, Integer limit) {
-        GroupMemberListResponse response = unwrap(socialServiceClient.listGroupMembers(
-                new GroupMemberListRequest(groupId, cursorUserId, limit)));
+        GroupMemberListResponse response = unwrap(call(() ->
+                socialServiceClient.listGroupMembers(new GroupMemberListRequest(groupId, cursorUserId, limit))));
         List<GroupMemberDO> items = new ArrayList<>();
         for (GroupMemberDTO item : response.items()) {
             items.add(toGroupMemberDO(item));
@@ -100,8 +102,9 @@ public class RemoteGroupService {
         if (cached != null) {
             return cached;
         }
-        ApiResponse<CheckGroupRecallPermissionResponse> response = socialServiceClient.checkGroupRecallPermission(
-                new CheckGroupRecallPermissionRequest(groupId, operatorUserId, targetUserId));
+        ApiResponse<CheckGroupRecallPermissionResponse> response = call(() ->
+                socialServiceClient.checkGroupRecallPermission(
+                        new CheckGroupRecallPermissionRequest(groupId, operatorUserId, targetUserId)));
         if (response != null && response.isSuccess()) {
             boolean allowed = response.getData() != null && response.getData().allowed();
             socialCacheSupport.putGroupRecallPermission(
@@ -123,7 +126,8 @@ public class RemoteGroupService {
         if (cached != null) {
             return cached;
         }
-        ApiResponse<GetGroupMemberIdsResponse> response = socialServiceClient.getGroupMemberIds(new GetGroupMemberIdsRequest(groupId));
+        ApiResponse<GetGroupMemberIdsResponse> response = call(() ->
+                socialServiceClient.getGroupMemberIds(new GetGroupMemberIdsRequest(groupId)));
         if (response != null && response.isSuccess()) {
             List<Long> ids = response.getData() == null || response.getData().memberUserIds() == null
                     ? List.of()
@@ -196,6 +200,14 @@ public class RemoteGroupService {
         return response == null || "REMOTE_UNAVAILABLE".equals(response.getCode());
     }
 
+    private <T> ApiResponse<T> call(SocialCall<T> socialCall) {
+        try {
+            return socialCall.execute();
+        } catch (RuntimeException ex) {
+            throw new SocialRpcException("REMOTE_UNAVAILABLE", ex.getMessage());
+        }
+    }
+
     private String messageOf(ApiResponse<?> response, String fallback) {
         return response == null || response.getMessage() == null || response.getMessage().isBlank()
                 ? fallback
@@ -208,5 +220,10 @@ public class RemoteGroupService {
 
     private long groupRecallPermissionCacheTtlMillis() {
         return Duration.ofSeconds(Math.max(1, socialRouteProperties.getGroupRecallPermissionCacheTtlSeconds())).toMillis();
+    }
+
+    @FunctionalInterface
+    private interface SocialCall<T> {
+        ApiResponse<T> execute();
     }
 }

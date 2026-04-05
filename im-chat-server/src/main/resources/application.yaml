@@ -212,7 +212,6 @@ im:
     log-fixed-delay-ms: 60000
   route:
     social:
-      remote-enabled: ${IM_ROUTE_SOCIAL_REMOTE_ENABLED:true}
       single-chat-permission-cache-ttl-seconds: ${IM_ROUTE_SOCIAL_SINGLE_CHAT_PERMISSION_CACHE_TTL_SECONDS:15}
       contact-active-cache-ttl-seconds: ${IM_ROUTE_SOCIAL_CONTACT_ACTIVE_CACHE_TTL_SECONDS:15}
       group-member-ids-cache-ttl-seconds: ${IM_ROUTE_SOCIAL_GROUP_MEMBER_IDS_CACHE_TTL_SECONDS:5}
