@@ -16,6 +16,7 @@
         <module>im-social-service</module>
         <module>im-user-service</module>
         <module>im-file-service</module>
+        <module>im-gateway</module>
     </modules>
 <!-- springboot版本-->
     <parent>

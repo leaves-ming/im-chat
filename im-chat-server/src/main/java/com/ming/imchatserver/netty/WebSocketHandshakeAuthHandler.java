@@ -69,9 +69,19 @@ import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
             String uri = req.uri();
             URI parsed = new URI(uri);
             String path = parsed.getPath();
-            if (properties.getWebsocketPath().equals(path)) {
+            boolean publicPath = properties.getWebsocketPath().equals(path);
+            boolean internalPath = properties.getInternalWebsocketPath().equals(path);
+            if (publicPath || internalPath) {
+                if (publicPath && !properties.isPublicWebsocketDirectAccessEnabled()) {
+                    writeErrorAndClose(ctx, HttpResponseStatus.FORBIDDEN, 403, "connect via gateway");
+                    return;
+                }
+                if (internalPath && !isTrustedGatewayRequest(req)) {
+                    writeErrorAndClose(ctx, HttpResponseStatus.FORBIDDEN, 403, "gateway proxy required");
+                    return;
+                }
                 // origin check
-                if (properties.isOriginCheckEnabled()) {
+                if (publicPath && properties.isOriginCheckEnabled()) {
                     String origin = req.headers().get(HttpHeaderNames.ORIGIN);
                     boolean okOrigin = false;
                     if (origin != null) {
@@ -126,25 +136,35 @@ import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
                 // If token came via query (e.g., /ws?token=xxx) we must normalize URI so WebSocketServerProtocolHandler can match path.
                 // Remove query part from request URI.
                 try {
-                    URI cleaned = new URI(parsed.getPath());
+                    URI cleaned = new URI(properties.getWebsocketPath());
                     // use reflection-friendly method: setUri on FullHttpRequest
                     req.setUri(cleaned.toString());
                 } catch (Exception ex) {
                     // ignore - not critical
                 }
                 // log with proxied IP headers if present
-                String remoteIp = req.headers().get("X-Real-IP");
+                String remoteIp = req.headers().get(properties.getClientIpHeaderName());
+                if (remoteIp == null) {
+                    remoteIp = req.headers().get("X-Real-IP");
+                }
                 if (remoteIp == null) {
                     String xff = req.headers().get("X-Forwarded-For");
                     if (xff != null) remoteIp = xff.split(",")[0].trim();
                 }
                 if (remoteIp == null) remoteIp = ctx.channel().remoteAddress() != null ? ctx.channel().remoteAddress().toString() : "unknown";
-                logger.info("websocket handshake accepted: userId={} channelId={} remote={} path={} traceId={}",
-                        u.userId, ctx.channel().id(), remoteIp, path, traceId);
+                logger.info("websocket handshake accepted: userId={} channelId={} remote={} path={} viaGateway={} traceId={}",
+                        u.userId, ctx.channel().id(), remoteIp, path, internalPath, traceId);
                 // let the pipeline continue (WebSocketServerProtocolHandler will do handshake)
             }
         }
         super.channelRead(ctx, msg);
+    }
+
+    private boolean isTrustedGatewayRequest(FullHttpRequest req) {
+        String proxyHeader = req.headers().get(properties.getTrustedGatewayHeaderName());
+        String secretHeader = req.headers().get(properties.getTrustedGatewaySecretHeaderName());
+        return properties.getTrustedGatewayHeaderValue().equals(proxyHeader)
+                && properties.getTrustedGatewaySecret().equals(secretHeader);
     }
 
     /**

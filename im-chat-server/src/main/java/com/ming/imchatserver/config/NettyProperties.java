@@ -22,6 +22,10 @@ public class NettyProperties {
     private int port = 8080;
     /** WebSocket 路径。 */
     private String websocketPath = "/ws";
+    /** 是否允许客户端直接连接 chat-server 公网 WebSocket 路径。 */
+    private boolean publicWebsocketDirectAccessEnabled = false;
+    /** gateway 转发到 chat-server 的内部 WebSocket 路径。 */
+    private String internalWebsocketPath = "/ws-internal";
     /** 读空闲阈值（秒）。 */
     private int readerIdleSeconds = 60;
     /** 写空闲阈值（秒）。 */
@@ -34,6 +38,16 @@ public class NettyProperties {
     private boolean originCheckEnabled = false;
     /** 允许的 Origin 列表。 */
     private List<String> originWhitelist = new ArrayList<>();
+    /** 标识请求由 gateway 转发的 header 名。 */
+    private String trustedGatewayHeaderName = "X-IM-Gateway-Proxy";
+    /** 标识请求由 gateway 转发的 header 值。 */
+    private String trustedGatewayHeaderValue = "im-gateway";
+    /** gateway 转发到 chat-server 时使用的共享密钥。 */
+    private String trustedGatewaySecret = "PLEASE_REPLACE_GATEWAY_WS_SECRET";
+    /** gateway 注入的共享密钥 header 名。 */
+    private String trustedGatewaySecretHeaderName = "X-IM-Gateway-Secret";
+    /** gateway 透传客户端 IP 的 header 名。 */
+    private String clientIpHeaderName = "X-IM-Client-IP";
 
     /** 同步批大小（用于重连后自动同步）。 */
     private int syncBatchSize = 50;

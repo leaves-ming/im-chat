@@ -29,13 +29,14 @@ spring:
         server-addr: ${IM_NACOS_SERVER_ADDR:127.0.0.1:8848}
         namespace: ${IM_NACOS_NAMESPACE:public}
         group: ${IM_NACOS_DISCOVERY_GROUP:IM_SERVICE}
+        port: ${IM_NETTY_PORT:8080}
         username: ${IM_NACOS_USERNAME:nacos}
         password: ${IM_NACOS_PASSWORD:nacos}
         register-enabled: ${IM_NACOS_REGISTER_ENABLED:${IM_NACOS_ENABLED:false}}
         metadata:
           version: ${im.instance.version:${IM_INSTANCE_VERSION:1.0.0-SNAPSHOT}}
           zone: ${im.instance.zone:${IM_INSTANCE_ZONE:default}}
-          protocol: ${im.instance.protocol:netty-ws-http}
+          protocol: ${im.instance.protocol:netty-ws-backend}
           startupTime: ${im.instance.startup-time:unknown}
       config:
         enabled: ${IM_NACOS_ENABLED:false}
@@ -138,7 +139,7 @@ im:
   instance:
     version: ${IM_INSTANCE_VERSION:1.0.0-SNAPSHOT}
     zone: ${IM_INSTANCE_ZONE:default}
-    protocol: netty-ws-http
+    protocol: netty-ws-backend
   observability:
     trace:
       header-name: ${IM_TRACE_HEADER_NAME:X-Trace-Id}
@@ -155,6 +156,8 @@ im:
     enabled: ${IM_NETTY_ENABLED:true}
     port: ${IM_NETTY_PORT:8080}
     websocket-path: /ws
+    public-websocket-direct-access-enabled: ${IM_PUBLIC_WS_DIRECT_ACCESS_ENABLED:false}
+    internal-websocket-path: /ws-internal
     reader-idle-seconds: 60
     writer-idle-seconds: 0
     all-idle-seconds: 120
@@ -166,6 +169,11 @@ im:
     group-push-queue-capacity: 1000
     message-recall-window-seconds: 120
     origin-check-enabled: false
+    trusted-gateway-header-name: X-IM-Gateway-Proxy
+    trusted-gateway-header-value: im-gateway
+    trusted-gateway-secret-header-name: X-IM-Gateway-Secret
+    trusted-gateway-secret: ${IM_GATEWAY_WS_SHARED_SECRET:PLEASE_REPLACE_GATEWAY_WS_SECRET}
+    client-ip-header-name: X-IM-Client-IP
     origin-whitelist:
       - http://localhost:5173
       - http://127.0.0.1:5173

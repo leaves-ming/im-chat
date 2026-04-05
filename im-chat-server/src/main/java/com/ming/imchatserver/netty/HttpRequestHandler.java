@@ -51,7 +51,6 @@ import java.io.InputStream;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
@@ -161,11 +160,6 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
                 handleFileDownloadUrl(ctx, req);
                 return;
             }
-            if (HttpMethod.POST.equals(req.method()) && uri.startsWith("/api/auth/login")) {
-                handleLogin(ctx, req);
-                return;
-            }
-
             ctx.fireChannelRead(req.retain());
         } finally {
             TraceContextSupport.clearMdc();
@@ -198,53 +192,6 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
         resp.put("traceId", traceId);
         resp.set("data", data);
         writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.OK, traceId);
-    }
-
-    private void handleLogin(ChannelHandlerContext ctx, FullHttpRequest req) throws Exception {
-        String body = req.content().toString(StandardCharsets.UTF_8);
-        try {
-            Map map = mapper.readValue(body, Map.class);
-            String username = map.getOrDefault("username", "").toString();
-            String password = map.getOrDefault("password", "").toString();
-            String remoteIp = resolveRemoteIp(ctx, req);
-            String deviceId = req.headers().get("X-Device-Id");
-            AuthService.AuthResult result = authService.login(username, password, remoteIp, deviceId);
-            if (result != null && result.success) {
-                ObjectNode data = mapper.createObjectNode();
-                data.put("token", result.token);
-                data.put("userId", result.userId);
-                data.put("expiresIn", result.expiresIn);
-                ObjectNode resp = mapper.createObjectNode();
-                resp.put("code", 0);
-                resp.put("msg", "ok");
-                resp.set("data", data);
-                writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.OK, TraceContextSupport.currentTraceId(ctx.channel()));
-                logger.info("login success username={} userId={}", username, result.userId);
-                return;
-            }
-            ObjectNode resp = mapper.createObjectNode();
-            if (result != null && "RATE_LIMITED".equals(result.errorCode)) {
-                writeJson(ctx, "{\"code\":429,\"msg\":\"too many requests\"}", HttpResponseStatus.TOO_MANY_REQUESTS, TraceContextSupport.currentTraceId(ctx.channel()));
-                return;
-            }
-            if (result != null && "INVALID_PARAM".equals(result.errorCode)) {
-                writeJson(ctx, "{\"code\":400,\"msg\":\"bad request\"}", HttpResponseStatus.BAD_REQUEST, TraceContextSupport.currentTraceId(ctx.channel()));
-                return;
-            }
-            if (result != null && ("REMOTE_UNAVAILABLE".equals(result.errorCode) || "INTERNAL_ERROR".equals(result.errorCode))) {
-                writeJson(ctx, "{\"code\":503,\"msg\":\"auth service unavailable\"}", HttpResponseStatus.SERVICE_UNAVAILABLE, TraceContextSupport.currentTraceId(ctx.channel()));
-                return;
-            }
-            resp.put("code", 401);
-            resp.put("msg", "invalid credentials");
-            writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.UNAUTHORIZED, TraceContextSupport.currentTraceId(ctx.channel()));
-        } catch (Exception ex) {
-            logger.warn("invalid login request body", ex);
-            ObjectNode resp = mapper.createObjectNode();
-            resp.put("code", 400);
-            resp.put("msg", "bad request");
-            writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.BAD_REQUEST, TraceContextSupport.currentTraceId(ctx.channel()));
-        }
     }
 
     private void handleFileUpload(ChannelHandlerContext ctx, FullHttpRequest req) throws Exception {

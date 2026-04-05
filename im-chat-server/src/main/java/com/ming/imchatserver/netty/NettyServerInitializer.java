@@ -97,7 +97,7 @@ import java.util.concurrent.Executor;
     /**
      * 为每个新连接构建处理链。
      * <p>
-     * 链路顺序：空闲检测 -> HTTP 编解码 -> 登录接口 -> WS 握手鉴权 -> WS 协议升级
+     * 链路顺序：空闲检测 -> HTTP 编解码 -> HTTP 辅助接口 -> WS 握手鉴权 -> WS 协议升级
      * -> 业务帧鉴权 -> 业务处理 -> 空闲/异常兜底处理。
      */
     
@@ -114,7 +114,8 @@ import java.util.concurrent.Executor;
                 fileStorageProperties, rateLimitService, rateLimitProperties,
                 runtimeObservabilitySettings, healthEndpoint, instanceProperties));
 
-        // 握手认证必须在 WebSocketServerProtocolHandler 之前完成
+        // 握手认证必须在 WebSocketServerProtocolHandler 之前完成。
+        // gateway 转发的内部路径会在握手认证阶段重写回外部标准路径。
         ch.pipeline().addLast(new WebSocketHandshakeAuthHandler(properties, authService, channelUserManager, runtimeObservabilitySettings));
         ch.pipeline().addLast(new WebSocketServerProtocolHandler(properties.getWebsocketPath(), null, true, properties.getMaxContentLength()));
         // 业务帧鉴权（要求 channel 已绑定 userId）

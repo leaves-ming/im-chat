@@ -5,10 +5,10 @@ spring:
         enabled: true
 
 im:
-  route:
-    message:
-      remote-enabled: true
-      fallback-to-local-on-error: true
-
-# 预留给后续 im-chat-server -> im-gateway 演进阶段使用。
-# 当前仓库尚未新增独立 im-gateway 模块，此文件仅固定 dataId 命名。
+  gateway:
+    access-log-enabled: true
+    introspect-enabled: true
+    relay-user-headers: true
+    websocket-path: /ws
+    backend-websocket-path: /ws-internal
+    gateway-shared-secret: ${IM_GATEWAY_WS_SHARED_SECRET:PLEASE_REPLACE_GATEWAY_WS_SECRET}
