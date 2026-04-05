@@ -206,12 +206,14 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
             Map map = mapper.readValue(body, Map.class);
             String username = map.getOrDefault("username", "").toString();
             String password = map.getOrDefault("password", "").toString();
-            AuthService.AuthResult result = authService.login(username, password);
+            String remoteIp = resolveRemoteIp(ctx, req);
+            String deviceId = req.headers().get("X-Device-Id");
+            AuthService.AuthResult result = authService.login(username, password, remoteIp, deviceId);
             if (result != null && result.success) {
                 ObjectNode data = mapper.createObjectNode();
                 data.put("token", result.token);
                 data.put("userId", result.userId);
-                data.put("expiresIn", properties.getTokenExpireSeconds());
+                data.put("expiresIn", result.expiresIn);
                 ObjectNode resp = mapper.createObjectNode();
                 resp.put("code", 0);
                 resp.put("msg", "ok");
@@ -221,17 +223,18 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
                 return;
             }
             ObjectNode resp = mapper.createObjectNode();
-            String remoteIp = resolveRemoteIp(ctx, req);
-            String deviceId = req.headers().get("X-Device-Id");
-            if (!consumeRateLimit("login_fail", "ip", remoteIp,
-                    rateLimitProperties == null ? 0L : rateLimitProperties.getLoginFail().getLimit(),
-                    rateLimitProperties == null ? 0L : rateLimitProperties.getLoginFail().getWindowSeconds())) {
+            if (result != null && "RATE_LIMITED".equals(result.errorCode)) {
                 writeJson(ctx, "{\"code\":429,\"msg\":\"too many requests\"}", HttpResponseStatus.TOO_MANY_REQUESTS, TraceContextSupport.currentTraceId(ctx.channel()));
                 return;
             }
-            consumeRateLimit("login_fail", "deviceId", deviceId,
-                    rateLimitProperties == null ? 0L : rateLimitProperties.getLoginFail().getLimit(),
-                    rateLimitProperties == null ? 0L : rateLimitProperties.getLoginFail().getWindowSeconds());
+            if (result != null && "INVALID_PARAM".equals(result.errorCode)) {
+                writeJson(ctx, "{\"code\":400,\"msg\":\"bad request\"}", HttpResponseStatus.BAD_REQUEST, TraceContextSupport.currentTraceId(ctx.channel()));
+                return;
+            }
+            if (result != null && ("REMOTE_UNAVAILABLE".equals(result.errorCode) || "INTERNAL_ERROR".equals(result.errorCode))) {
+                writeJson(ctx, "{\"code\":503,\"msg\":\"auth service unavailable\"}", HttpResponseStatus.SERVICE_UNAVAILABLE, TraceContextSupport.currentTraceId(ctx.channel()));
+                return;
+            }
             resp.put("code", 401);
             resp.put("msg", "invalid credentials");
             writeJson(ctx, mapper.writeValueAsString(resp), HttpResponseStatus.UNAUTHORIZED, TraceContextSupport.currentTraceId(ctx.channel()));
@@ -260,7 +263,6 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
             writeJson(ctx, "{\"code\":429,\"msg\":\"too many requests\"}", HttpResponseStatus.TOO_MANY_REQUESTS, TraceContextSupport.currentTraceId(ctx.channel()));
             return;
         }
-
         HttpPostRequestDecoder decoder = new HttpPostRequestDecoder(req);
         decoder.setDiscardThreshold(0);
         try {
@@ -421,7 +423,7 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
             return Optional.empty();
         }
         String token = authHeader.substring("Bearer ".length()).trim();
-        if (token.isEmpty() || !authService.verifyToken(token)) {
+        if (token.isEmpty()) {
             return Optional.empty();
         }
         return authService.parseToken(token);

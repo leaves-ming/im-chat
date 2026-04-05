@@ -105,7 +105,7 @@ import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
                     List<String> protocols = req.headers().getAll("Sec-WebSocket-Protocol");
                     if (!protocols.isEmpty()) token = protocols.get(0);
                 }
-                if (token == null || !authService.verifyToken(token)) {
+                if (token == null) {
                     writeErrorAndClose(ctx, HttpResponseStatus.UNAUTHORIZED, 401, "invalid token");
                     return;
                 }

@@ -30,9 +30,6 @@ public class NettyProperties {
     private int allIdleSeconds = 120;
     /** HTTP 聚合器最大内容长度。 */
     private int maxContentLength = 10 * 1024 * 1024;
-    /** JWT token 过期时间（秒）。 */
-    private long tokenExpireSeconds = 3600;
-
     /** 是否开启 Origin 白名单校验。 */
     private boolean originCheckEnabled = false;
     /** 允许的 Origin 列表。 */

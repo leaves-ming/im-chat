@@ -16,7 +16,7 @@ public interface AuthService {
      * @param password 明文密码
      * @return 登录结果，包含是否成功及 token 信息
      */
-    AuthResult login(String username, String password);
+    AuthResult login(String username, String password, String clientIp, String deviceId);
 
     /**
      * 校验 token 是否合法且未过期。
@@ -39,6 +39,9 @@ public interface AuthService {
         public boolean success;
         public String token;
         public long userId;
+        public long expiresIn;
+        public String errorCode;
+        public String errorMessage;
     }
 
     /** token 解析后的用户模型。 */

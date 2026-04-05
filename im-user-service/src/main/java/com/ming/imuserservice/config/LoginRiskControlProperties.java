@@ -1,21 +1,24 @@
-package com.ming.imchatserver.config;
+package com.ming.imuserservice.config;
 
 import lombok.Getter;
 import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.stereotype.Component;
 
 /**
- * Redis 固定窗口限流配置。
+ * 登录风控配置，支持 Nacos 动态刷新。
  */
-@Component
-@ConfigurationProperties(prefix = "im.rate-limit")
 @Getter
 @Setter
-public class RateLimitProperties {
-    private Rule messageSend = new Rule(120, 60);
-    private Rule fileUpload = new Rule(30, 60);
-    private Rule fileDownload = new Rule(60, 60);
+@RefreshScope
+@Component
+@ConfigurationProperties(prefix = "im.user.login-risk")
+public class LoginRiskControlProperties {
+
+    private Rule ip = new Rule(20, 300);
+    private Rule device = new Rule(20, 300);
+    private Rule username = new Rule(10, 300);
 
     @Getter
     @Setter

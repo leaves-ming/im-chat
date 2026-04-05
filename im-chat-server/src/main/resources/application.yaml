@@ -17,6 +17,9 @@ spring:
         enabled: true
       client:
         config:
+          im-user-service:
+            connectTimeout: ${IM_USER_CONNECT_TIMEOUT_MS:300}
+            readTimeout: ${IM_USER_READ_TIMEOUT_MS:800}
           im-social-service:
             connectTimeout: ${IM_SOCIAL_CONNECT_TIMEOUT_MS:300}
             readTimeout: ${IM_SOCIAL_READ_TIMEOUT_MS:800}
@@ -148,9 +151,6 @@ im:
       hot-refresh-safe-prefixes:
         - im.observability.trace
         - im.observability.access-log-enabled
-  auth:
-    jwt:
-      secret: ${IM_AUTH_JWT_SECRET:PLEASE_REPLACE_JWT_SECRET}
   netty:
     enabled: ${IM_NETTY_ENABLED:true}
     port: ${IM_NETTY_PORT:8080}
@@ -159,7 +159,6 @@ im:
     writer-idle-seconds: 0
     all-idle-seconds: 120
     max-content-length: ${im.file.max-file-size-bytes:10485760}
-    token-expire-seconds: 3600
     offline-pull-max-limit: 200
     single-chat-require-active-contact: false
     group-push-batch-size: 200
@@ -195,9 +194,6 @@ im:
     presence-ttl-seconds: 180
     client-msg-id-ttl-seconds: 600
   rate-limit:
-    login-fail:
-      limit: 20
-      window-seconds: 300
     message-send:
       limit: 120
       window-seconds: 60
