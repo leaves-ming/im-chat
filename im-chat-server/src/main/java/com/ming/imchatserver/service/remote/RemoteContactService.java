@@ -9,11 +9,11 @@ import com.ming.imapicontract.social.ContactOperateRequest;
 import com.ming.imapicontract.social.ContactOperateResponse;
 import com.ming.imapicontract.social.ValidateSingleChatPermissionRequest;
 import com.ming.imapicontract.social.ValidateSingleChatPermissionResponse;
+import com.ming.imchatserver.application.model.ContactOperationResult;
+import com.ming.imchatserver.application.model.ContactPage;
+import com.ming.imchatserver.application.model.ContactView;
 import com.ming.imchatserver.config.SocialRouteProperties;
-import com.ming.imchatserver.dao.ContactDO;
 import com.ming.imchatserver.remote.social.SocialServiceClient;
-import com.ming.imchatserver.service.ContactService;
-import com.ming.imchatserver.service.SingleChatPermissionCapable;
 import com.ming.imchatserver.service.SocialRpcException;
 import com.ming.imchatserver.service.support.SocialCacheSupport;
 import org.springframework.stereotype.Component;
@@ -26,7 +26,7 @@ import java.util.List;
  * social 联系人远程服务包装。
  */
 @Component
-public class RemoteContactService implements SingleChatPermissionCapable {
+public class RemoteContactService {
 
     private final SocialServiceClient socialServiceClient;
     private final SocialCacheSupport socialCacheSupport;
@@ -40,36 +40,36 @@ public class RemoteContactService implements SingleChatPermissionCapable {
         this.socialRouteProperties = socialRouteProperties;
     }
 
-    public ContactService.Result addOrActivateContact(Long ownerUserId, Long peerUserId) {
+    public ContactOperationResult addOrActivateContact(Long ownerUserId, Long peerUserId) {
         ContactOperateResponse response = unwrap(call(() ->
                 socialServiceClient.addContact(new ContactOperateRequest(ownerUserId, peerUserId))));
         socialCacheSupport.invalidateContactPair(ownerUserId, peerUserId);
-        return new ContactService.Result(response.success(), response.idempotent());
+        return new ContactOperationResult(response.success(), response.idempotent());
     }
 
-    public ContactService.Result removeOrDeactivateContact(Long ownerUserId, Long peerUserId) {
+    public ContactOperationResult removeOrDeactivateContact(Long ownerUserId, Long peerUserId) {
         ContactOperateResponse response = unwrap(call(() ->
                 socialServiceClient.removeContact(new ContactOperateRequest(ownerUserId, peerUserId))));
         socialCacheSupport.invalidateContactPair(ownerUserId, peerUserId);
-        return new ContactService.Result(response.success(), response.idempotent());
+        return new ContactOperationResult(response.success(), response.idempotent());
     }
 
-    public ContactService.ContactPageResult listActiveContacts(Long ownerUserId, Long cursorPeerUserId, Integer limit) {
+    public ContactPage listActiveContacts(Long ownerUserId, Long cursorPeerUserId, Integer limit) {
         ContactListResponse response = unwrap(call(() ->
                 socialServiceClient.listContacts(new ContactListRequest(ownerUserId, cursorPeerUserId, limit))));
-        List<ContactDO> items = new ArrayList<>();
+        List<ContactView> items = new ArrayList<>();
         for (ContactItemDTO item : response.items()) {
-            ContactDO target = new ContactDO();
-            target.setOwnerUserId(item.ownerUserId());
-            target.setPeerUserId(item.peerUserId());
-            target.setRelationStatus(item.relationStatus());
-            target.setSource(item.source());
-            target.setAlias(item.alias());
-            target.setCreatedAt(item.createdAt());
-            target.setUpdatedAt(item.updatedAt());
-            items.add(target);
+            items.add(new ContactView(
+                    item.ownerUserId(),
+                    item.peerUserId(),
+                    item.relationStatus(),
+                    item.source(),
+                    item.alias(),
+                    item.createdAt(),
+                    item.updatedAt()
+            ));
         }
-        return new ContactService.ContactPageResult(items, response.nextCursor(), response.hasMore());
+        return new ContactPage(items, response.nextCursor(), response.hasMore());
     }
 
     public boolean isActiveContact(Long ownerUserId, Long peerUserId) {
@@ -90,7 +90,6 @@ public class RemoteContactService implements SingleChatPermissionCapable {
         return false;
     }
 
-    @Override
     public boolean isSingleChatAllowed(Long fromUserId, Long toUserId) {
         Boolean cached = socialCacheSupport.getSingleChatPermission(fromUserId, toUserId);
         if (cached != null) {

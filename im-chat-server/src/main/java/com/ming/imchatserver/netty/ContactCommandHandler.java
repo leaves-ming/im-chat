@@ -3,8 +3,9 @@ package com.ming.imchatserver.netty;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ming.imchatserver.application.facade.SocialFacade;
+import com.ming.imchatserver.application.model.ContactOperationResult;
+import com.ming.imchatserver.application.model.ContactPage;
 import com.ming.imchatserver.config.NettyProperties;
-import com.ming.imchatserver.service.ContactService;
 
 /**
  * 联系人命令处理器。
@@ -49,12 +50,12 @@ public class ContactCommandHandler implements WsCommandHandler {
         if (!isValidContactPeer(userId, peerUserId)) {
             throw new IllegalArgumentException("peerUserId must be greater than 0 and different from self");
         }
-        ContactService.Result result = socialFacade.addContact(userId, peerUserId);
+        ContactOperationResult result = socialFacade.addContact(userId, peerUserId);
         ObjectNode resp = protocolSupport.mapper().createObjectNode();
         resp.put("type", "CONTACT_ADD_RESULT");
         resp.put("peerUserId", peerUserId);
-        resp.put("success", result.isSuccess());
-        resp.put("idempotent", result.isIdempotent());
+        resp.put("success", result.success());
+        resp.put("idempotent", result.idempotent());
         protocolSupport.sendJson(context.channel(), resp);
     }
 
@@ -64,12 +65,12 @@ public class ContactCommandHandler implements WsCommandHandler {
         if (!isValidContactPeer(userId, peerUserId)) {
             throw new IllegalArgumentException("peerUserId must be greater than 0 and different from self");
         }
-        ContactService.Result result = socialFacade.removeContact(userId, peerUserId);
+        ContactOperationResult result = socialFacade.removeContact(userId, peerUserId);
         ObjectNode resp = protocolSupport.mapper().createObjectNode();
         resp.put("type", "CONTACT_REMOVE_RESULT");
         resp.put("peerUserId", peerUserId);
-        resp.put("success", result.isSuccess());
-        resp.put("idempotent", result.isIdempotent());
+        resp.put("success", result.success());
+        resp.put("idempotent", result.idempotent());
         protocolSupport.sendJson(context.channel(), resp);
     }
 
@@ -88,17 +89,17 @@ public class ContactCommandHandler implements WsCommandHandler {
         if (cursorPeerUserId != null && cursorPeerUserId < 0L) {
             throw new IllegalArgumentException("cursorPeerUserId must be greater than or equal to 0");
         }
-        ContactService.ContactPageResult page = socialFacade.listContacts(userId, cursorPeerUserId, limit);
+        ContactPage page = socialFacade.listContacts(userId, cursorPeerUserId, limit);
         ObjectNode resp = protocolSupport.mapper().createObjectNode();
         resp.put("type", "CONTACT_LIST_RESULT");
         resp.put("success", true);
-        resp.put("hasMore", page.isHasMore());
-        if (page.getNextCursor() == null) {
+        resp.put("hasMore", page.hasMore());
+        if (page.nextCursor() == null) {
             resp.putNull("nextCursor");
         } else {
-            resp.put("nextCursor", page.getNextCursor());
+            resp.put("nextCursor", page.nextCursor());
         }
-        protocolSupport.writeContactList(resp, page.getItems());
+        protocolSupport.writeContactList(resp, page.items());
         protocolSupport.sendJson(context.channel(), resp);
     }
 

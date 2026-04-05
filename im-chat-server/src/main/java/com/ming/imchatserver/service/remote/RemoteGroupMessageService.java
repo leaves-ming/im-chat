@@ -9,11 +9,11 @@ import com.ming.imapicontract.message.PullGroupOfflineRequest;
 import com.ming.imapicontract.message.PullGroupOfflineResponse;
 import com.ming.imapicontract.message.RecallGroupMessageRequest;
 import com.ming.imapicontract.message.RecallGroupMessageResponse;
-import com.ming.imchatserver.dao.GroupMessageDO;
+import com.ming.imchatserver.application.model.GroupMessagePage;
+import com.ming.imchatserver.application.model.GroupMessagePersistResult;
+import com.ming.imchatserver.application.model.GroupMessageView;
 import com.ming.imchatserver.remote.message.MessageServiceClient;
-import com.ming.imchatserver.service.GroupMessageService;
 import com.ming.imchatserver.service.MessageRecallException;
-import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -22,9 +22,8 @@ import java.util.List;
 /**
  * 群消息远程服务适配器。
  */
-@Primary
 @Component
-public class RemoteGroupMessageService implements GroupMessageService {
+public class RemoteGroupMessageService {
 
     private final MessageServiceClient messageServiceClient;
 
@@ -32,56 +31,52 @@ public class RemoteGroupMessageService implements GroupMessageService {
         this.messageServiceClient = messageServiceClient;
     }
 
-    @Override
-    public PersistResult persistMessage(Long groupId, Long fromUserId, String clientMsgId, String msgType, String content) {
+    public GroupMessagePersistResult persistMessage(Long groupId, Long fromUserId, String clientMsgId, String msgType, String content) {
         PersistGroupMessageResponse response = unwrap(messageServiceClient.persistGroupMessage(
                 new PersistGroupMessageRequest(groupId, fromUserId, clientMsgId, msgType, content)));
-        return new PersistResult(toGroupMessageDO(response.message()));
+        return new GroupMessagePersistResult(toGroupMessageView(response.message()));
     }
 
-    @Override
-    public PullResult pullOffline(Long groupId, Long userId, Long cursorSeq, int limit) {
+    public GroupMessagePage pullOffline(Long groupId, Long userId, Long cursorSeq, int limit) {
         PullGroupOfflineResponse response = unwrap(messageServiceClient.pullGroupOffline(
                 new PullGroupOfflineRequest(groupId, userId, cursorSeq, limit)));
-        List<GroupMessageDO> messages = new ArrayList<>();
+        List<GroupMessageView> messages = new ArrayList<>();
         if (response.messages() != null) {
             for (GroupMessageDTO item : response.messages()) {
-                messages.add(toGroupMessageDO(item));
+                messages.add(toGroupMessageView(item));
             }
         }
-        return new PullResult(messages, response.hasMore(), response.nextCursorSeq());
+        return new GroupMessagePage(messages, response.hasMore(), response.nextCursorSeq());
     }
 
-    @Override
-    public GroupMessageDO findByServerMsgId(String serverMsgId) {
-        return toGroupMessageDO(unwrap(messageServiceClient.getGroupMessage(new GetGroupMessageRequest(serverMsgId))).message());
+    public GroupMessageView findByServerMsgId(String serverMsgId) {
+        return toGroupMessageView(unwrap(messageServiceClient.getGroupMessage(new GetGroupMessageRequest(serverMsgId))).message());
     }
 
-    @Override
-    public GroupMessageDO recallMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds) {
+    public GroupMessageView recallMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds) {
         RecallGroupMessageResponse response = unwrap(messageServiceClient.recallGroupMessage(
                 new RecallGroupMessageRequest(operatorUserId, serverMsgId, recallWindowSeconds)));
-        return toGroupMessageDO(response.message());
+        return toGroupMessageView(response.message());
     }
 
-    private GroupMessageDO toGroupMessageDO(GroupMessageDTO item) {
+    private GroupMessageView toGroupMessageView(GroupMessageDTO item) {
         if (item == null) {
             return null;
         }
-        GroupMessageDO target = new GroupMessageDO();
-        target.setId(item.id());
-        target.setGroupId(item.groupId());
-        target.setSeq(item.seq());
-        target.setServerMsgId(item.serverMsgId());
-        target.setClientMsgId(item.clientMsgId());
-        target.setFromUserId(item.fromUserId());
-        target.setMsgType(item.msgType());
-        target.setContent(item.content());
-        target.setStatus(item.status());
-        target.setCreatedAt(item.createdAt());
-        target.setRetractedAt(item.retractedAt());
-        target.setRetractedBy(item.retractedBy());
-        return target;
+        return new GroupMessageView(
+                item.id(),
+                item.groupId(),
+                item.seq(),
+                item.serverMsgId(),
+                item.clientMsgId(),
+                item.fromUserId(),
+                item.msgType(),
+                item.content(),
+                item.status(),
+                item.createdAt(),
+                item.retractedAt(),
+                item.retractedBy()
+        );
     }
 
     private <T> T unwrap(ApiResponse<T> response) {

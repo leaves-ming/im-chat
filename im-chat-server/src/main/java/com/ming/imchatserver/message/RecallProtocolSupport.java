@@ -2,8 +2,8 @@ package com.ming.imchatserver.message;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.ming.imchatserver.dao.GroupMessageDO;
-import com.ming.imchatserver.dao.MessageDO;
+import com.ming.imchatserver.application.model.GroupMessageView;
+import com.ming.imchatserver.application.model.SingleMessageView;
 import com.ming.imchatserver.mq.DispatchMessagePayload;
 
 /**
@@ -16,19 +16,19 @@ public final class RecallProtocolSupport {
     private RecallProtocolSupport() {
     }
 
-    public static ObjectNode buildSingleRecallNode(ObjectMapper mapper, String type, MessageDO message) {
+    public static ObjectNode buildSingleRecallNode(ObjectMapper mapper, String type, SingleMessageView message) {
         ObjectNode node = mapper.createObjectNode();
         node.put("type", type);
-        node.put("serverMsgId", message.getServerMsgId());
-        writeNullableText(node, "clientMsgId", message.getClientMsgId());
-        writeNullableLong(node, "fromUserId", message.getFromUserId());
-        writeNullableLong(node, "toUserId", message.getToUserId());
-        node.put("msgType", MessageContentCodec.normalizeMsgType(message.getMsgType()));
+        node.put("serverMsgId", message.serverMsgId());
+        writeNullableText(node, "clientMsgId", message.clientMsgId());
+        writeNullableLong(node, "fromUserId", message.fromUserId());
+        writeNullableLong(node, "toUserId", message.toUserId());
+        node.put("msgType", MessageContentCodec.normalizeMsgType(message.msgType()));
         node.putNull("content");
         node.put("status", STATUS_RETRACTED);
-        writeNullableText(node, "createdAt", toInstantText(message.getCreatedAt()));
-        writeNullableText(node, "retractedAt", toInstantText(message.getRetractedAt()));
-        writeNullableLong(node, "retractedBy", message.getRetractedBy());
+        writeNullableText(node, "createdAt", toInstantText(message.createdAt()));
+        writeNullableText(node, "retractedAt", toInstantText(message.retractedAt()));
+        writeNullableLong(node, "retractedBy", message.retractedBy());
         return node;
     }
 
@@ -48,20 +48,20 @@ public final class RecallProtocolSupport {
         return node;
     }
 
-    public static ObjectNode buildGroupRecallNode(ObjectMapper mapper, String type, GroupMessageDO message) {
+    public static ObjectNode buildGroupRecallNode(ObjectMapper mapper, String type, GroupMessageView message) {
         ObjectNode node = mapper.createObjectNode();
         node.put("type", type);
-        node.put("serverMsgId", message.getServerMsgId());
-        writeNullableText(node, "clientMsgId", message.getClientMsgId());
-        writeNullableLong(node, "fromUserId", message.getFromUserId());
-        writeNullableLong(node, "groupId", message.getGroupId());
-        writeNullableLong(node, "seq", message.getSeq());
-        node.put("msgType", MessageContentCodec.normalizeMsgType(message.getMsgType()));
+        node.put("serverMsgId", message.serverMsgId());
+        writeNullableText(node, "clientMsgId", message.clientMsgId());
+        writeNullableLong(node, "fromUserId", message.fromUserId());
+        writeNullableLong(node, "groupId", message.groupId());
+        writeNullableLong(node, "seq", message.seq());
+        node.put("msgType", MessageContentCodec.normalizeMsgType(message.msgType()));
         node.putNull("content");
         node.put("status", STATUS_RETRACTED);
-        writeNullableText(node, "createdAt", toInstantText(message.getCreatedAt()));
-        writeNullableText(node, "retractedAt", toInstantText(message.getRetractedAt()));
-        writeNullableLong(node, "retractedBy", message.getRetractedBy());
+        writeNullableText(node, "createdAt", toInstantText(message.createdAt()));
+        writeNullableText(node, "retractedAt", toInstantText(message.retractedAt()));
+        writeNullableLong(node, "retractedBy", message.retractedBy());
         return node;
     }
 

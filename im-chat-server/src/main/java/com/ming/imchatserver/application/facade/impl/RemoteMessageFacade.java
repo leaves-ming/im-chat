@@ -15,10 +15,11 @@ import com.ming.imapicontract.message.RecallSingleMessageRequest;
 import com.ming.imapicontract.message.RecallSingleMessageResponse;
 import com.ming.imapicontract.message.SyncCursorDTO;
 import com.ming.imchatserver.application.facade.MessageFacade;
-import com.ming.imchatserver.dao.MessageDO;
+import com.ming.imchatserver.application.model.SingleMessagePage;
+import com.ming.imchatserver.application.model.SingleMessageView;
+import com.ming.imchatserver.application.model.SingleSyncCursor;
 import com.ming.imchatserver.remote.message.MessageServiceClient;
 import com.ming.imchatserver.service.MessageRecallException;
-import com.ming.imchatserver.service.MessageService;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
@@ -51,21 +52,18 @@ public class RemoteMessageFacade implements MessageFacade {
     public AckReportResult reportAck(Long reporterUserId, String serverMsgId, String targetStatus) {
         AckMessageStatusResponse response = unwrap(messageServiceClient.ackMessageStatus(
                 new AckMessageStatusRequest(reporterUserId, serverMsgId, targetStatus)));
-        return new AckReportResult(toMessageDO(response.message()), response.status(), response.updated(), response.ackAt());
+        return new AckReportResult(toSingleMessageView(response.message()), response.status(), response.updated(), response.ackAt());
     }
 
     @Override
-    public boolean enqueueStatusNotify(MessageDO message, String status) {
+    public boolean enqueueStatusNotify(SingleMessageView message, String status) {
         return true;
     }
 
     @Override
     @SentinelResource("im-message-service:pullOffline")
-    public MessageService.CursorPageResult pullOffline(Long userId,
-                                                       String deviceId,
-                                                       MessageService.SyncCursor syncCursor,
-                                                       int limit) {
-        SyncCursorDTO syncCursorDTO = syncCursor == null ? null : new SyncCursorDTO(syncCursor.getCursorCreatedAt(), syncCursor.getCursorId());
+    public SingleMessagePage pullOffline(Long userId, String deviceId, SingleSyncCursor syncCursor, int limit) {
+        SyncCursorDTO syncCursorDTO = syncCursor == null ? null : new SyncCursorDTO(syncCursor.cursorCreatedAt(), syncCursor.cursorId());
         PullOfflineResponse response = unwrap(messageServiceClient.pullOffline(
                 new PullOfflineRequest(userId, deviceId, syncCursorDTO, limit, false)));
         return toCursorPageResult(response.page());
@@ -73,7 +71,7 @@ public class RemoteMessageFacade implements MessageFacade {
 
     @Override
     @SentinelResource("im-message-service:loadInitialSync")
-    public MessageService.CursorPageResult loadInitialSync(Long userId, String deviceId, int limit) {
+    public SingleMessagePage loadInitialSync(Long userId, String deviceId, int limit) {
         PullOfflineResponse response = unwrap(messageServiceClient.pullOffline(
                 new PullOfflineRequest(userId, deviceId, null, limit, true)));
         return toCursorPageResult(response.page());
@@ -81,34 +79,34 @@ public class RemoteMessageFacade implements MessageFacade {
 
     @Override
     @SentinelResource("im-message-service:advanceCursor")
-    public void advanceSyncCursor(Long userId, String deviceId, MessageService.CursorPageResult pageResult) {
-        if (pageResult == null || pageResult.getNextCursorCreatedAt() == null || pageResult.getNextCursorId() == null) {
+    public void advanceSyncCursor(Long userId, String deviceId, SingleMessagePage pageResult) {
+        if (pageResult == null || pageResult.nextCursorCreatedAt() == null || pageResult.nextCursorId() == null) {
             return;
         }
         unwrap(messageServiceClient.advanceCursor(new AdvanceCursorRequest(
                 userId,
                 deviceId,
-                pageResult.getNextCursorCreatedAt(),
-                pageResult.getNextCursorId()
+                pageResult.nextCursorCreatedAt(),
+                pageResult.nextCursorId()
         )));
     }
 
     @Override
     @SentinelResource("im-message-service:recallSingle")
-    public MessageDO recallMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds) {
+    public SingleMessageView recallMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds) {
         RecallSingleMessageResponse response = unwrap(messageServiceClient.recallSingleMessage(
                 new RecallSingleMessageRequest(operatorUserId, serverMsgId, recallWindowSeconds)));
-        return toMessageDO(response.message());
+        return toSingleMessageView(response.message());
     }
 
-    private MessageService.CursorPageResult toCursorPageResult(CursorPageDTO page) {
-        List<MessageDO> messages = new ArrayList<>();
+    private SingleMessagePage toCursorPageResult(CursorPageDTO page) {
+        List<SingleMessageView> messages = new ArrayList<>();
         if (page != null && page.messages() != null) {
             for (MessageDTO message : page.messages()) {
-                messages.add(toMessageDO(message));
+                messages.add(toSingleMessageView(message));
             }
         }
-        return new MessageService.CursorPageResult(
+        return new SingleMessagePage(
                 messages,
                 page != null && page.hasMore(),
                 page == null ? null : page.nextCursorCreatedAt(),
@@ -116,25 +114,25 @@ public class RemoteMessageFacade implements MessageFacade {
         );
     }
 
-    private MessageDO toMessageDO(MessageDTO message) {
+    private SingleMessageView toSingleMessageView(MessageDTO message) {
         if (message == null) {
             return null;
         }
-        MessageDO target = new MessageDO();
-        target.setId(message.id());
-        target.setServerMsgId(message.serverMsgId());
-        target.setClientMsgId(message.clientMsgId());
-        target.setFromUserId(message.fromUserId());
-        target.setToUserId(message.toUserId());
-        target.setMsgType(message.msgType());
-        target.setContent(message.content());
-        target.setStatus(message.status());
-        target.setCreatedAt(message.createdAt());
-        target.setDeliveredAt(message.deliveredAt());
-        target.setAckedAt(message.ackedAt());
-        target.setRetractedAt(message.retractedAt());
-        target.setRetractedBy(message.retractedBy());
-        return target;
+        return new SingleMessageView(
+                message.id(),
+                message.serverMsgId(),
+                message.clientMsgId(),
+                message.fromUserId(),
+                message.toUserId(),
+                message.msgType(),
+                message.content(),
+                message.status(),
+                message.createdAt(),
+                message.deliveredAt(),
+                message.ackedAt(),
+                message.retractedAt(),
+                message.retractedBy()
+        );
     }
 
     private <T> T unwrap(ApiResponse<T> response) {

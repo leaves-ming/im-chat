@@ -7,18 +7,15 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ming.imchatserver.application.facade.AuthFacade;
 import com.ming.imchatserver.application.facade.MessageFacade;
 import com.ming.imchatserver.application.facade.SocialFacade;
-import com.ming.imchatserver.application.facade.impl.SocialFacadeImpl;
+import com.ming.imchatserver.application.model.SingleMessagePage;
+import com.ming.imchatserver.application.model.SingleMessageView;
 import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.config.RateLimitProperties;
 import com.ming.imchatserver.config.RedisStateProperties;
-import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.observability.TraceContextSupport;
-import com.ming.imchatserver.service.ContactService;
 import com.ming.imchatserver.service.FileTokenBizException;
 import com.ming.imchatserver.service.GroupBizException;
-import com.ming.imchatserver.service.GroupMessageService;
-import com.ming.imchatserver.service.GroupService;
 import com.ming.imchatserver.service.IdempotencyService;
 import com.ming.imchatserver.service.MessageRecallException;
 import com.ming.imchatserver.service.MessageService;
@@ -60,46 +57,38 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
 
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
                                  MessageService messageService,
-                                 ContactService contactService,
-                                 GroupService groupService,
-                                 GroupMessageService groupMessageService,
+                                 SocialFacade socialFacade,
                                  NettyProperties nettyProperties,
                                  MetricsService metricsService) {
-        this(channelUserManager, messageService, contactService, groupService, groupMessageService,
+        this(channelUserManager, messageService, socialFacade,
                 nettyProperties, metricsService, null, null, null, null, null, null, null, null, null);
     }
 
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
                                  MessageService messageService,
-                                 ContactService contactService,
-                                 GroupService groupService,
-                                 GroupMessageService groupMessageService,
+                                 SocialFacade socialFacade,
                                  NettyProperties nettyProperties,
                                  MetricsService metricsService,
                                  Executor groupPushExecutor) {
-        this(channelUserManager, messageService, contactService, groupService, groupMessageService,
+        this(channelUserManager, messageService, socialFacade,
                 nettyProperties, metricsService, groupPushExecutor, null, null, null, null, null, null, null, null);
     }
 
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
                                  MessageService messageService,
-                                 ContactService contactService,
-                                 GroupService groupService,
-                                 GroupMessageService groupMessageService,
+                                 SocialFacade socialFacade,
                                  NettyProperties nettyProperties,
                                  MetricsService metricsService,
                                  Executor groupPushExecutor,
                                  GroupPushCoordinator groupPushCoordinator) {
-        this(channelUserManager, messageService, contactService, groupService, groupMessageService,
+        this(channelUserManager, messageService, socialFacade,
                 nettyProperties, metricsService, groupPushExecutor, groupPushCoordinator,
                 null, null, null, null, null, null, null);
     }
 
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
                                  MessageService messageService,
-                                 ContactService contactService,
-                                 GroupService groupService,
-                                 GroupMessageService groupMessageService,
+                                 SocialFacade socialFacade,
                                  NettyProperties nettyProperties,
                                  MetricsService metricsService,
                                  Executor groupPushExecutor,
@@ -108,7 +97,7 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
                                  RateLimitService rateLimitService,
                                  RateLimitProperties rateLimitProperties,
                                  RedisStateProperties redisStateProperties) {
-        this(channelUserManager, messageService, contactService, groupService, groupMessageService,
+        this(channelUserManager, messageService, socialFacade,
                 nettyProperties, metricsService, groupPushExecutor, groupPushCoordinator,
                 idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
                 null, null, null);
@@ -116,9 +105,7 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
 
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
                                  MessageService messageService,
-                                 ContactService contactService,
-                                 GroupService groupService,
-                                 GroupMessageService groupMessageService,
+                                 SocialFacade socialFacade,
                                  NettyProperties nettyProperties,
                                  MetricsService metricsService,
                                  Executor groupPushExecutor,
@@ -128,7 +115,7 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
                                  RateLimitProperties rateLimitProperties,
                                  RedisStateProperties redisStateProperties,
                                  Executor businessExecutor) {
-        this(channelUserManager, messageService, contactService, groupService, groupMessageService,
+        this(channelUserManager, messageService, socialFacade,
                 nettyProperties, metricsService, groupPushExecutor, groupPushCoordinator,
                 idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
                 null, null, businessExecutor);
@@ -136,9 +123,7 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
 
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
                                  MessageService messageService,
-                                 ContactService contactService,
-                                 GroupService groupService,
-                                 GroupMessageService groupMessageService,
+                                 SocialFacade injectedSocialFacade,
                                  NettyProperties nettyProperties,
                                  MetricsService metricsService,
                                  Executor groupPushExecutor,
@@ -156,9 +141,7 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
         ObjectMapper mapper = new ObjectMapper();
         this.protocolSupport = new WsProtocolSupport(mapper);
         this.messageFacade = Objects.requireNonNull(injectedMessageFacade, "messageFacade unavailable");
-        SocialFacade socialFacade = new SocialFacadeImpl(contactService, groupService, groupMessageService,
-                channelUserManager, groupPushExecutor, groupPushCoordinator, metricsService,
-                idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties, nettyProperties);
+        SocialFacade socialFacade = Objects.requireNonNull(injectedSocialFacade, "socialFacade unavailable");
         this.authFacade = Objects.requireNonNull(injectedAuthFacade, "authFacade unavailable");
         this.commandRouter = new WsCommandRouter(
                 new ChatCommandHandler(this.messageFacade, socialFacade, nettyProperties, protocolSupport, channelUserManager),
@@ -172,7 +155,7 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
                                  MessageService messageService,
                                  NettyProperties nettyProperties,
                                  MetricsService metricsService) {
-        this(channelUserManager, messageService, null, null, null, nettyProperties, metricsService,
+        this(channelUserManager, messageService, null, nettyProperties, metricsService,
                 null, null, null, null, null, null, null, null, null);
     }
 
@@ -293,11 +276,11 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
 
         String deviceId = protocolSupport.currentDeviceId(ctx.channel());
         int batchSize = nettyProperties.getSyncBatchSize();
-        var pageResult = authFacade.loadInitialSync(userId, deviceId, batchSize);
+        SingleMessagePage pageResult = authFacade.loadInitialSync(userId, deviceId, batchSize);
         ObjectNode batchNode = protocolSupport.mapper().createObjectNode();
         batchNode.put("type", "SYNC_BATCH");
         ArrayNode messages = protocolSupport.mapper().createArrayNode();
-        for (MessageDO message : pageResult.getMessages()) {
+        for (SingleMessageView message : pageResult.messages()) {
             ObjectNode item = protocolSupport.mapper().createObjectNode();
             protocolSupport.writeSingleMessageNode(item, message);
             messages.add(item);
@@ -307,8 +290,8 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
 
         ObjectNode end = protocolSupport.mapper().createObjectNode();
         end.put("type", "SYNC_END");
-        end.put("hasMore", pageResult.isHasMore());
-        protocolSupport.writeSingleSyncProgress(end, deviceId, null, pageResult.getNextCursorCreatedAt(), pageResult.getNextCursorId());
+        end.put("hasMore", pageResult.hasMore());
+        protocolSupport.writeSingleSyncProgress(end, deviceId, pageResult.nextCursorCreatedAt(), pageResult.nextCursorId());
         ctx.channel().writeAndFlush(new TextWebSocketFrame(protocolSupport.mapper().writeValueAsString(end)))
                 .addListener(future -> {
                     if (future.isSuccess()) {

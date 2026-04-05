@@ -3,10 +3,10 @@ package com.ming.imchatserver.netty;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.ming.imchatserver.dao.ContactDO;
-import com.ming.imchatserver.dao.GroupMemberDO;
-import com.ming.imchatserver.dao.GroupMessageDO;
-import com.ming.imchatserver.dao.MessageDO;
+import com.ming.imchatserver.application.model.ContactView;
+import com.ming.imchatserver.application.model.GroupMemberView;
+import com.ming.imchatserver.application.model.GroupMessageView;
+import com.ming.imchatserver.application.model.SingleMessageView;
 import com.ming.imchatserver.message.MessageContentCodec;
 import io.netty.channel.Channel;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
@@ -63,54 +63,54 @@ public class WsProtocolSupport {
         return date.toInstant().toString();
     }
 
-    public void writeSingleMessageNode(ObjectNode target, MessageDO message) {
-        target.put("serverMsgId", message.getServerMsgId());
-        if (message.getClientMsgId() == null) {
+    public void writeSingleMessageNode(ObjectNode target, SingleMessageView message) {
+        target.put("serverMsgId", message.serverMsgId());
+        if (message.clientMsgId() == null) {
             target.putNull("clientMsgId");
         } else {
-            target.put("clientMsgId", message.getClientMsgId());
+            target.put("clientMsgId", message.clientMsgId());
         }
-        target.put("fromUserId", message.getFromUserId());
-        target.put("toUserId", message.getToUserId());
-        target.put("msgType", MessageContentCodec.normalizeMsgType(message.getMsgType()));
-        writeMessageContent(target, message.getMsgType(), message.getContent(), isSingleRetracted(message));
-        target.put("status", isSingleRetracted(message) ? STATUS_RETRACTED : message.getStatus());
-        target.put("createdAt", formatAsInstant(message.getCreatedAt()));
-        writeRetractionMeta(target, message.getRetractedAt(), message.getRetractedBy());
+        target.put("fromUserId", message.fromUserId());
+        target.put("toUserId", message.toUserId());
+        target.put("msgType", MessageContentCodec.normalizeMsgType(message.msgType()));
+        writeMessageContent(target, message.msgType(), message.content(), isSingleRetracted(message));
+        target.put("status", isSingleRetracted(message) ? STATUS_RETRACTED : message.status());
+        target.put("createdAt", formatAsInstant(message.createdAt()));
+        writeRetractionMeta(target, message.retractedAt(), message.retractedBy());
     }
 
-    public void writeGroupMessageNode(ObjectNode target, GroupMessageDO message) {
-        target.put("groupId", message.getGroupId());
-        target.put("seq", message.getSeq());
-        target.put("serverMsgId", message.getServerMsgId());
-        target.put("fromUserId", message.getFromUserId());
-        target.put("msgType", MessageContentCodec.normalizeMsgType(message.getMsgType()));
-        writeMessageContent(target, message.getMsgType(), message.getContent(), isGroupRetracted(message));
+    public void writeGroupMessageNode(ObjectNode target, GroupMessageView message) {
+        target.put("groupId", message.groupId());
+        target.put("seq", message.seq());
+        target.put("serverMsgId", message.serverMsgId());
+        target.put("fromUserId", message.fromUserId());
+        target.put("msgType", MessageContentCodec.normalizeMsgType(message.msgType()));
+        writeMessageContent(target, message.msgType(), message.content(), isGroupRetracted(message));
         target.put("status", isGroupRetracted(message) ? STATUS_RETRACTED : "SENT");
-        target.put("createdAt", formatAsInstant(message.getCreatedAt()));
-        writeRetractionMeta(target, message.getRetractedAt(), message.getRetractedBy());
+        target.put("createdAt", formatAsInstant(message.createdAt()));
+        writeRetractionMeta(target, message.retractedAt(), message.retractedBy());
     }
 
-    public void writeContactList(ObjectNode resp, Iterable<ContactDO> contacts) {
+    public void writeContactList(ObjectNode resp, Iterable<ContactView> contacts) {
         ArrayNode items = mapper.createArrayNode();
-        for (ContactDO contact : contacts) {
+        for (ContactView contact : contacts) {
             ObjectNode item = mapper.createObjectNode();
-            item.put("peerUserId", contact.getPeerUserId());
-            item.put("relationStatus", contact.getRelationStatus());
-            item.put("createdAt", formatAsInstant(contact.getCreatedAt()));
-            item.put("updatedAt", formatAsInstant(contact.getUpdatedAt()));
+            item.put("peerUserId", contact.peerUserId());
+            item.put("relationStatus", contact.relationStatus());
+            item.put("createdAt", formatAsInstant(contact.createdAt()));
+            item.put("updatedAt", formatAsInstant(contact.updatedAt()));
             items.add(item);
         }
         resp.set("items", items);
     }
 
-    public void writeMemberList(ObjectNode resp, Iterable<GroupMemberDO> members) {
+    public void writeMemberList(ObjectNode resp, Iterable<GroupMemberView> members) {
         ArrayNode items = mapper.createArrayNode();
-        for (GroupMemberDO member : members) {
+        for (GroupMemberView member : members) {
             ObjectNode item = mapper.createObjectNode();
-            item.put("userId", member.getUserId());
-            item.put("role", member.getRole());
-            item.put("memberStatus", member.getMemberStatus());
+            item.put("userId", member.userId());
+            item.put("role", member.role());
+            item.put("memberStatus", member.memberStatus());
             items.add(item);
         }
         resp.set("items", items);
@@ -118,7 +118,6 @@ public class WsProtocolSupport {
 
     public void writeSingleSyncProgress(ObjectNode target,
                                         String deviceId,
-                                        MessageDO ignored,
                                         Date nextCursorCreatedAt,
                                         Long nextCursorId) {
         if (nextCursorCreatedAt == null) {
@@ -198,11 +197,11 @@ public class WsProtocolSupport {
         }
     }
 
-    private boolean isSingleRetracted(MessageDO message) {
-        return message != null && (STATUS_RETRACTED.equalsIgnoreCase(message.getStatus()) || message.getRetractedAt() != null);
+    private boolean isSingleRetracted(SingleMessageView message) {
+        return message != null && (STATUS_RETRACTED.equalsIgnoreCase(message.status()) || message.retractedAt() != null);
     }
 
-    private boolean isGroupRetracted(GroupMessageDO message) {
-        return message != null && (Integer.valueOf(GROUP_STATUS_RETRACTED).equals(message.getStatus()) || message.getRetractedAt() != null);
+    private boolean isGroupRetracted(GroupMessageView message) {
+        return message != null && (Integer.valueOf(GROUP_STATUS_RETRACTED).equals(message.status()) || message.retractedAt() != null);
     }
 }

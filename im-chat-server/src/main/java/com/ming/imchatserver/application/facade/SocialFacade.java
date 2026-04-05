@@ -1,11 +1,13 @@
 package com.ming.imchatserver.application.facade;
 
-import com.ming.imchatserver.dao.ContactDO;
-import com.ming.imchatserver.dao.GroupMemberDO;
-import com.ming.imchatserver.dao.GroupMessageDO;
-import com.ming.imchatserver.service.ContactService;
-import com.ming.imchatserver.service.GroupMessageService;
-import com.ming.imchatserver.service.GroupService;
+import com.ming.imchatserver.application.model.ContactOperationResult;
+import com.ming.imchatserver.application.model.ContactPage;
+import com.ming.imchatserver.application.model.GroupJoinResult;
+import com.ming.imchatserver.application.model.GroupMemberPage;
+import com.ming.imchatserver.application.model.GroupMessagePage;
+import com.ming.imchatserver.application.model.GroupMessagePersistResult;
+import com.ming.imchatserver.application.model.GroupMessageView;
+import com.ming.imchatserver.application.model.GroupQuitResult;
 
 import java.util.List;
 
@@ -14,29 +16,25 @@ import java.util.List;
  */
 public interface SocialFacade {
 
-    ContactService.Result addContact(Long ownerUserId, Long peerUserId);
+    ContactOperationResult addContact(Long ownerUserId, Long peerUserId);
 
-    ContactService.Result removeContact(Long ownerUserId, Long peerUserId);
+    ContactOperationResult removeContact(Long ownerUserId, Long peerUserId);
 
-    ContactService.ContactPageResult listContacts(Long ownerUserId, Long cursorPeerUserId, int limit);
+    ContactPage listContacts(Long ownerUserId, Long cursorPeerUserId, int limit);
 
-    GroupService.JoinGroupResult joinGroup(Long groupId, Long userId);
+    GroupJoinResult joinGroup(Long groupId, Long userId);
 
-    GroupService.QuitGroupResult quitGroup(Long groupId, Long userId);
+    GroupQuitResult quitGroup(Long groupId, Long userId);
 
-    GroupService.MemberPageResult listMembers(Long groupId, Long cursorUserId, int limit);
+    GroupMemberPage listMembers(Long groupId, Long cursorUserId, int limit);
 
-    GroupMessageService.PersistResult sendGroupChat(Long groupId,
-                                                    Long fromUserId,
-                                                    String clientMsgId,
-                                                    String msgType,
-                                                    String content);
+    GroupMessagePersistResult sendGroupChat(Long groupId, Long fromUserId, String clientMsgId, String msgType, String content);
 
-    GroupMessageService.PullResult pullGroupOffline(Long groupId, Long userId, Long cursorSeq, int limit);
+    GroupMessagePage pullGroupOffline(Long groupId, Long userId, Long cursorSeq, int limit);
 
-    GroupMessageDO recallGroupMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds);
+    GroupMessageView recallGroupMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds);
 
-    void dispatchGroupPush(Long groupId, GroupMessageDO message) throws Exception;
+    void dispatchGroupPush(Long groupId, GroupMessageView message) throws Exception;
 
     boolean isSingleChatAllowed(Long fromUserId, Long toUserId);
 

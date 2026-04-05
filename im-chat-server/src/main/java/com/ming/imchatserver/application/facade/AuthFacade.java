@@ -1,11 +1,11 @@
 package com.ming.imchatserver.application.facade;
 
-import com.ming.imchatserver.service.MessageService;
+import com.ming.imchatserver.application.model.SingleMessagePage;
 
 /**
  * 鉴权与会话同步门面。
  */
 public interface AuthFacade {
 
-    MessageService.CursorPageResult loadInitialSync(Long userId, String deviceId, int limit);
+    SingleMessagePage loadInitialSync(Long userId, String deviceId, int limit);
 }

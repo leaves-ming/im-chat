@@ -2,6 +2,7 @@ package com.ming.imchatserver.netty;
 
 import com.ming.imchatserver.application.facade.AuthFacade;
 import com.ming.imchatserver.application.facade.MessageFacade;
+import com.ming.imchatserver.application.facade.SocialFacade;
 import com.ming.imchatserver.config.FileStorageProperties;
 import com.ming.imchatserver.config.InstanceProperties;
 import com.ming.imchatserver.config.NettyProperties;
@@ -10,10 +11,7 @@ import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.observability.RuntimeObservabilitySettings;
 import com.ming.imchatserver.service.AuthService;
-import com.ming.imchatserver.service.ContactService;
 import com.ming.imchatserver.service.FileService;
-import com.ming.imchatserver.service.GroupMessageService;
-import com.ming.imchatserver.service.GroupService;
 import com.ming.imchatserver.service.IdempotencyService;
 import com.ming.imchatserver.service.RateLimitService;
 import io.netty.bootstrap.ServerBootstrap;
@@ -48,9 +46,7 @@ public class NettyWebSocketServer {
     private final NettyProperties properties;
     private final AuthService authService;
     private final ChannelUserManager channelUserManager;
-    private final ContactService contactService;
-    private final GroupService groupService;
-    private final GroupMessageService groupMessageService;
+    private final SocialFacade socialFacade;
     private final MetricsService metricsService;
     private final FileService fileService;
     private final FileStorageProperties fileStorageProperties;
@@ -82,9 +78,7 @@ public class NettyWebSocketServer {
     public NettyWebSocketServer(NettyProperties properties,
                                 AuthService authService,
                                 ChannelUserManager channelUserManager,
-                                ContactService contactService,
-                                GroupService groupService,
-                                GroupMessageService groupMessageService,
+                                SocialFacade socialFacade,
                                 MetricsService metricsService,
                                 FileService fileService,
                                 FileStorageProperties fileStorageProperties,
@@ -103,9 +97,7 @@ public class NettyWebSocketServer {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
-        this.contactService = contactService;
-        this.groupService = groupService;
-        this.groupMessageService = groupMessageService;
+        this.socialFacade = socialFacade;
         this.metricsService = metricsService;
         this.fileService = fileService;
         this.fileStorageProperties = fileStorageProperties;
@@ -137,7 +129,7 @@ public class NettyWebSocketServer {
                 .channel(NioServerSocketChannel.class)
                 .localAddress(new InetSocketAddress(properties.getPort()))
                 .childHandler(new NettyServerInitializer(properties, authService, channelUserManager,
-                        contactService, groupService, groupMessageService, metricsService,
+                        socialFacade, metricsService,
                         fileService, fileStorageProperties, groupPushExecutor, groupPushCoordinator,
                         idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
                         runtimeObservabilitySettings, healthEndpoint, instanceProperties,

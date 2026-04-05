@@ -2,6 +2,7 @@ package com.ming.imchatserver.netty;
 
 import com.ming.imchatserver.application.facade.AuthFacade;
 import com.ming.imchatserver.application.facade.MessageFacade;
+import com.ming.imchatserver.application.facade.SocialFacade;
 import com.ming.imchatserver.config.FileStorageProperties;
 import com.ming.imchatserver.config.InstanceProperties;
 import com.ming.imchatserver.config.NettyProperties;
@@ -10,10 +11,7 @@ import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.observability.RuntimeObservabilitySettings;
 import com.ming.imchatserver.service.AuthService;
-import com.ming.imchatserver.service.ContactService;
 import com.ming.imchatserver.service.FileService;
-import com.ming.imchatserver.service.GroupMessageService;
-import com.ming.imchatserver.service.GroupService;
 import com.ming.imchatserver.service.IdempotencyService;
 import com.ming.imchatserver.service.RateLimitService;
 import io.netty.channel.ChannelInitializer;
@@ -35,9 +33,7 @@ import java.util.concurrent.Executor;
     private final NettyProperties properties;
     private final AuthService authService;
     private final ChannelUserManager channelUserManager;
-    private final ContactService contactService;
-    private final GroupService groupService;
-    private final GroupMessageService groupMessageService;
+    private final SocialFacade socialFacade;
     private final MetricsService metricsService;
     private final FileService fileService;
     private final FileStorageProperties fileStorageProperties;
@@ -60,9 +56,7 @@ import java.util.concurrent.Executor;
     public NettyServerInitializer(NettyProperties properties,
                                   AuthService authService,
                                   ChannelUserManager channelUserManager,
-                                  ContactService contactService,
-                                  GroupService groupService,
-                                  GroupMessageService groupMessageService,
+                                  SocialFacade socialFacade,
                                   MetricsService metricsService,
                                   FileService fileService,
                                   FileStorageProperties fileStorageProperties,
@@ -81,9 +75,7 @@ import java.util.concurrent.Executor;
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
-        this.contactService = contactService;
-        this.groupService = groupService;
-        this.groupMessageService = groupMessageService;
+        this.socialFacade = socialFacade;
         this.metricsService = metricsService;
         this.fileService = fileService;
         this.fileStorageProperties = fileStorageProperties;
@@ -127,7 +119,7 @@ import java.util.concurrent.Executor;
         ch.pipeline().addLast(new WebSocketServerProtocolHandler(properties.getWebsocketPath(), null, true, properties.getMaxContentLength()));
         // 业务帧鉴权（要求 channel 已绑定 userId）
         ch.pipeline().addLast(new WsBusinessAuthHandler(channelUserManager));
-        ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, null, contactService, groupService, groupMessageService,
+        ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, null, socialFacade,
                 properties, metricsService, groupPushExecutor, groupPushCoordinator,
                 idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
                 messageFacade, authFacadeFacade,

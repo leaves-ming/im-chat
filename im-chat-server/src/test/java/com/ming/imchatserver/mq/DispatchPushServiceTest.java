@@ -4,8 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imchatserver.netty.ChannelUserManager;
-import com.ming.imchatserver.service.GroupMessageService;
-import com.ming.imchatserver.service.GroupService;
+import com.ming.imchatserver.service.remote.RemoteGroupMessageService;
+import com.ming.imchatserver.service.remote.RemoteGroupService;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import org.junit.jupiter.api.Test;
@@ -26,8 +26,8 @@ class DispatchPushServiceTest {
     @Test
     void dispatchSingleShouldHandleExplicitRecallEvent() throws Exception {
         ChannelUserManager channelUserManager = mock(ChannelUserManager.class);
-        GroupMessageService groupMessageService = mock(GroupMessageService.class);
-        GroupService groupService = mock(GroupService.class);
+        RemoteGroupMessageService groupMessageService = mock(RemoteGroupMessageService.class);
+        RemoteGroupService groupService = mock(RemoteGroupService.class);
         EmbeddedChannel recipient = new EmbeddedChannel();
         EmbeddedChannel senderOther = new EmbeddedChannel();
         when(channelUserManager.getChannels(2L)).thenReturn(List.of(recipient));
@@ -71,8 +71,8 @@ class DispatchPushServiceTest {
     @Test
     void dispatchSingleShouldSkipSenderOnOriginNodeForRecallEvent() throws Exception {
         ChannelUserManager channelUserManager = mock(ChannelUserManager.class);
-        GroupMessageService groupMessageService = mock(GroupMessageService.class);
-        GroupService groupService = mock(GroupService.class);
+        RemoteGroupMessageService groupMessageService = mock(RemoteGroupMessageService.class);
+        RemoteGroupService groupService = mock(RemoteGroupService.class);
         EmbeddedChannel recipient = new EmbeddedChannel();
         EmbeddedChannel senderOther = new EmbeddedChannel();
         when(channelUserManager.getChannels(2L)).thenReturn(List.of(recipient));
@@ -105,8 +105,8 @@ class DispatchPushServiceTest {
     @Test
     void dispatchSingleShouldDeliverStatusNotifyToSender() throws Exception {
         ChannelUserManager channelUserManager = mock(ChannelUserManager.class);
-        GroupMessageService groupMessageService = mock(GroupMessageService.class);
-        GroupService groupService = mock(GroupService.class);
+        RemoteGroupMessageService groupMessageService = mock(RemoteGroupMessageService.class);
+        RemoteGroupService groupService = mock(RemoteGroupService.class);
         EmbeddedChannel sender = new EmbeddedChannel();
         when(channelUserManager.getChannels(1L)).thenReturn(List.of(sender));
 
@@ -130,8 +130,8 @@ class DispatchPushServiceTest {
     @Test
     void dispatchGroupRecallShouldNotSkipOriginNodeMembers() throws Exception {
         ChannelUserManager channelUserManager = mock(ChannelUserManager.class);
-        GroupMessageService groupMessageService = mock(GroupMessageService.class);
-        GroupService groupService = mock(GroupService.class);
+        RemoteGroupMessageService groupMessageService = mock(RemoteGroupMessageService.class);
+        RemoteGroupService groupService = mock(RemoteGroupService.class);
         EmbeddedChannel member1 = new EmbeddedChannel();
         EmbeddedChannel member2 = new EmbeddedChannel();
         when(groupService.listActiveMemberUserIds(101L)).thenReturn(List.of(1L, 2L));

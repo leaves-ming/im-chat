@@ -2,7 +2,7 @@ package com.ming.imchatserver.application.facade.impl;
 
 import com.ming.imchatserver.application.facade.AuthFacade;
 import com.ming.imchatserver.application.facade.MessageFacade;
-import com.ming.imchatserver.service.MessageService;
+import com.ming.imchatserver.application.model.SingleMessagePage;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
@@ -20,7 +20,7 @@ public class RoutingAuthFacade implements AuthFacade {
     }
 
     @Override
-    public MessageService.CursorPageResult loadInitialSync(Long userId, String deviceId, int limit) {
+    public SingleMessagePage loadInitialSync(Long userId, String deviceId, int limit) {
         return messageFacade.loadInitialSync(userId, deviceId, limit);
     }
 }

@@ -2,13 +2,13 @@ package com.ming.imchatserver.mq;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.ming.imchatserver.application.model.GroupMessageView;
 import com.ming.imchatserver.config.RedisStateProperties;
-import com.ming.imchatserver.dao.GroupMessageDO;
 import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.message.RecallProtocolSupport;
 import com.ming.imchatserver.netty.ChannelUserManager;
-import com.ming.imchatserver.service.GroupMessageService;
-import com.ming.imchatserver.service.GroupService;
+import com.ming.imchatserver.service.remote.RemoteGroupMessageService;
+import com.ming.imchatserver.service.remote.RemoteGroupService;
 import io.netty.channel.Channel;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import org.slf4j.Logger;
@@ -40,15 +40,15 @@ public class DispatchPushService {
     private static final int GROUP_STATUS_RETRACTED = 2;
 
     private final ChannelUserManager channelUserManager;
-    private final GroupMessageService groupMessageService;
-    private final GroupService groupService;
+    private final RemoteGroupMessageService groupMessageService;
+    private final RemoteGroupService groupService;
     private final RedisStateProperties redisStateProperties;
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Autowired
     public DispatchPushService(ChannelUserManager channelUserManager,
-                               GroupMessageService groupMessageService,
-                               GroupService groupService,
+                               RemoteGroupMessageService groupMessageService,
+                               RemoteGroupService groupService,
                                RedisStateProperties redisStateProperties) {
         this.channelUserManager = channelUserManager;
         this.groupMessageService = groupMessageService;
@@ -170,7 +170,7 @@ public class DispatchPushService {
             return;
         }
 
-        GroupMessageDO current = groupMessageService == null ? null : groupMessageService.findByServerMsgId(payload.getServerMsgId());
+        GroupMessageView current = groupMessageService == null ? null : groupMessageService.findByServerMsgId(payload.getServerMsgId());
         if (current != null && isRetracted(current)) {
             dispatchGroupRecall(buildGroupRecallPayload(current, payload.getOriginServerId()));
             return;
@@ -204,8 +204,8 @@ public class DispatchPushService {
     /**
      * 判断群消息是否已经处于撤回状态。
      */
-    private boolean isRetracted(GroupMessageDO message) {
-        return message != null && (Integer.valueOf(GROUP_STATUS_RETRACTED).equals(message.getStatus()) || message.getRetractedAt() != null);
+    private boolean isRetracted(GroupMessageView message) {
+        return message != null && (Integer.valueOf(GROUP_STATUS_RETRACTED).equals(message.status()) || message.retractedAt() != null);
     }
 
     /**
@@ -213,20 +213,20 @@ public class DispatchPushService {
      *
      * <p>用于“MQ 收到的是普通推送事件，但数据库中该消息已撤回”的补偿场景。</p>
      */
-    private DispatchMessagePayload buildGroupRecallPayload(GroupMessageDO message, String originServerId) {
+    private DispatchMessagePayload buildGroupRecallPayload(GroupMessageView message, String originServerId) {
         DispatchMessagePayload payload = new DispatchMessagePayload();
         payload.setEventType(DispatchMessagePayload.EVENT_TYPE_RECALL);
         payload.setOriginServerId(originServerId);
-        payload.setGroupId(message.getGroupId());
-        payload.setSeq(message.getSeq());
-        payload.setServerMsgId(message.getServerMsgId());
-        payload.setClientMsgId(message.getClientMsgId());
-        payload.setFromUserId(message.getFromUserId());
-        payload.setMsgType(message.getMsgType());
+        payload.setGroupId(message.groupId());
+        payload.setSeq(message.seq());
+        payload.setServerMsgId(message.serverMsgId());
+        payload.setClientMsgId(message.clientMsgId());
+        payload.setFromUserId(message.fromUserId());
+        payload.setMsgType(message.msgType());
         payload.setStatus(STATUS_RETRACTED);
-        payload.setCreatedAt(message.getCreatedAt() == null ? null : message.getCreatedAt().toInstant().toString());
-        payload.setRetractedAt(message.getRetractedAt() == null ? null : message.getRetractedAt().toInstant().toString());
-        payload.setRetractedBy(message.getRetractedBy());
+        payload.setCreatedAt(message.createdAt() == null ? null : message.createdAt().toInstant().toString());
+        payload.setRetractedAt(message.retractedAt() == null ? null : message.retractedAt().toInstant().toString());
+        payload.setRetractedBy(message.retractedBy());
         return payload;
     }
 

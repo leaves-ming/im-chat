@@ -3,20 +3,26 @@ package com.ming.imchatserver.application.facade.impl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ming.imchatserver.application.facade.SocialFacade;
+import com.ming.imchatserver.application.model.ContactOperationResult;
+import com.ming.imchatserver.application.model.ContactPage;
+import com.ming.imchatserver.application.model.GroupJoinResult;
+import com.ming.imchatserver.application.model.GroupMemberPage;
+import com.ming.imchatserver.application.model.GroupMessagePage;
+import com.ming.imchatserver.application.model.GroupMessagePersistResult;
+import com.ming.imchatserver.application.model.GroupMessageView;
+import com.ming.imchatserver.application.model.GroupQuitResult;
 import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.config.RateLimitProperties;
 import com.ming.imchatserver.config.RedisStateProperties;
-import com.ming.imchatserver.dao.GroupMessageDO;
 import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.netty.ChannelUserManager;
 import com.ming.imchatserver.netty.GroupPushCoordinator;
-import com.ming.imchatserver.service.ContactService;
-import com.ming.imchatserver.service.GroupMessageService;
-import com.ming.imchatserver.service.GroupService;
 import com.ming.imchatserver.service.IdempotencyService;
 import com.ming.imchatserver.service.RateLimitService;
-import com.ming.imchatserver.service.SingleChatPermissionCapable;
+import com.ming.imchatserver.service.remote.RemoteContactService;
+import com.ming.imchatserver.service.remote.RemoteGroupMessageService;
+import com.ming.imchatserver.service.remote.RemoteGroupService;
 import io.netty.channel.Channel;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import org.slf4j.Logger;
@@ -39,9 +45,9 @@ public class SocialFacadeImpl implements SocialFacade {
     private static final Logger logger = LoggerFactory.getLogger(SocialFacadeImpl.class);
     private static final int DEFAULT_GROUP_PUSH_BATCH_SIZE = 200;
 
-    private final ContactService contactService;
-    private final GroupService groupService;
-    private final GroupMessageService groupMessageService;
+    private final RemoteContactService contactService;
+    private final RemoteGroupService groupService;
+    private final RemoteGroupMessageService groupMessageService;
     private final ChannelUserManager channelUserManager;
     private final Executor groupPushExecutor;
     private final GroupPushCoordinator groupPushCoordinator;
@@ -53,9 +59,9 @@ public class SocialFacadeImpl implements SocialFacade {
     private final NettyProperties nettyProperties;
     private final ObjectMapper mapper = new ObjectMapper();
 
-    public SocialFacadeImpl(ContactService contactService,
-                            GroupService groupService,
-                            GroupMessageService groupMessageService,
+    public SocialFacadeImpl(RemoteContactService contactService,
+                            RemoteGroupService groupService,
+                            RemoteGroupMessageService groupMessageService,
                             ChannelUserManager channelUserManager,
                             Executor groupPushExecutor,
                             GroupPushCoordinator groupPushCoordinator,
@@ -80,41 +86,37 @@ public class SocialFacadeImpl implements SocialFacade {
     }
 
     @Override
-    public ContactService.Result addContact(Long ownerUserId, Long peerUserId) {
+    public ContactOperationResult addContact(Long ownerUserId, Long peerUserId) {
         return contactService.addOrActivateContact(ownerUserId, peerUserId);
     }
 
     @Override
-    public ContactService.Result removeContact(Long ownerUserId, Long peerUserId) {
+    public ContactOperationResult removeContact(Long ownerUserId, Long peerUserId) {
         return contactService.removeOrDeactivateContact(ownerUserId, peerUserId);
     }
 
     @Override
-    public ContactService.ContactPageResult listContacts(Long ownerUserId, Long cursorPeerUserId, int limit) {
+    public ContactPage listContacts(Long ownerUserId, Long cursorPeerUserId, int limit) {
         return contactService.listActiveContacts(ownerUserId, cursorPeerUserId, limit);
     }
 
     @Override
-    public com.ming.imchatserver.service.GroupService.JoinGroupResult joinGroup(Long groupId, Long userId) {
+    public GroupJoinResult joinGroup(Long groupId, Long userId) {
         return groupService.joinGroup(groupId, userId);
     }
 
     @Override
-    public com.ming.imchatserver.service.GroupService.QuitGroupResult quitGroup(Long groupId, Long userId) {
+    public GroupQuitResult quitGroup(Long groupId, Long userId) {
         return groupService.quitGroup(groupId, userId);
     }
 
     @Override
-    public com.ming.imchatserver.service.GroupService.MemberPageResult listMembers(Long groupId, Long cursorUserId, int limit) {
+    public GroupMemberPage listMembers(Long groupId, Long cursorUserId, int limit) {
         return groupService.listMembers(groupId, cursorUserId, limit);
     }
 
     @Override
-    public GroupMessageService.PersistResult sendGroupChat(Long groupId,
-                                                           Long fromUserId,
-                                                           String clientMsgId,
-                                                           String msgType,
-                                                           String content) {
+    public GroupMessagePersistResult sendGroupChat(Long groupId, Long fromUserId, String clientMsgId, String msgType, String content) {
         if (!groupService.isActiveMember(groupId, fromUserId)) {
             throw new SecurityException("sender is not active group member");
         }
@@ -133,7 +135,7 @@ public class SocialFacadeImpl implements SocialFacade {
     }
 
     @Override
-    public GroupMessageService.PullResult pullGroupOffline(Long groupId, Long userId, Long cursorSeq, int limit) {
+    public GroupMessagePage pullGroupOffline(Long groupId, Long userId, Long cursorSeq, int limit) {
         if (!groupService.isActiveMember(groupId, userId)) {
             throw new SecurityException("user is not active group member");
         }
@@ -141,8 +143,8 @@ public class SocialFacadeImpl implements SocialFacade {
     }
 
     @Override
-    public GroupMessageDO recallGroupMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds) {
-        GroupMessageDO existing = groupMessageService.findByServerMsgId(serverMsgId);
+    public GroupMessageView recallGroupMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds) {
+        GroupMessageView existing = groupMessageService.findByServerMsgId(serverMsgId);
         if (existing == null) {
             throw new IllegalArgumentException("serverMsgId not found");
         }
@@ -150,7 +152,7 @@ public class SocialFacadeImpl implements SocialFacade {
     }
 
     @Override
-    public void dispatchGroupPush(Long groupId, GroupMessageDO message) throws Exception {
+    public void dispatchGroupPush(Long groupId, GroupMessageView message) throws Exception {
         List<Long> memberUserIds = groupService.listActiveMemberUserIds(groupId);
         List<Channel> targetChannels = new ArrayList<>();
         for (Long userId : memberUserIds) {
@@ -168,23 +170,16 @@ public class SocialFacadeImpl implements SocialFacade {
                 ? nettyProperties.getGroupPushBatchSize()
                 : DEFAULT_GROUP_PUSH_BATCH_SIZE;
         if (groupPushCoordinator == null) {
-            dispatchGroupPushInOrder(groupId, message.getServerMsgId(), targetChannels, payload, attemptedChannels, batchSize);
+            dispatchGroupPushInOrder(groupId, message.serverMsgId(), targetChannels, payload, attemptedChannels, batchSize);
             return;
         }
         groupPushCoordinator.enqueue(groupId,
-                () -> dispatchGroupPushInOrder(groupId, message.getServerMsgId(), targetChannels, payload, attemptedChannels, batchSize));
+                () -> dispatchGroupPushInOrder(groupId, message.serverMsgId(), targetChannels, payload, attemptedChannels, batchSize));
     }
 
     @Override
     public boolean isSingleChatAllowed(Long fromUserId, Long toUserId) {
-        if (contactService == null) {
-            return true;
-        }
-        if (contactService instanceof SingleChatPermissionCapable permissionCapable) {
-            return permissionCapable.isSingleChatAllowed(fromUserId, toUserId);
-        }
-        return contactService.isActiveContact(fromUserId, toUserId)
-                && contactService.isActiveContact(toUserId, fromUserId);
+        return contactService.isSingleChatAllowed(fromUserId, toUserId);
     }
 
     @Override
@@ -197,17 +192,17 @@ public class SocialFacadeImpl implements SocialFacade {
         return groupService.listActiveMemberUserIds(groupId);
     }
 
-    private String buildGroupPushPayload(GroupMessageDO message) throws Exception {
+    private String buildGroupPushPayload(GroupMessageView message) throws Exception {
         ObjectNode push = mapper.createObjectNode();
         push.put("type", "GROUP_MSG_PUSH");
-        push.put("groupId", message.getGroupId());
-        push.put("seq", message.getSeq());
-        push.put("serverMsgId", message.getServerMsgId());
-        push.put("fromUserId", message.getFromUserId());
-        push.put("msgType", MessageContentCodec.normalizeMsgType(message.getMsgType()));
-        MessageContentCodec.writeProtocolContent(push, "content", message.getMsgType(), message.getContent());
+        push.put("groupId", message.groupId());
+        push.put("seq", message.seq());
+        push.put("serverMsgId", message.serverMsgId());
+        push.put("fromUserId", message.fromUserId());
+        push.put("msgType", MessageContentCodec.normalizeMsgType(message.msgType()));
+        MessageContentCodec.writeProtocolContent(push, "content", message.msgType(), message.content());
         push.put("status", "SENT");
-        push.put("createdAt", message.getCreatedAt().toInstant().toString());
+        push.put("createdAt", message.createdAt().toInstant().toString());
         return mapper.writeValueAsString(push);
     }
 

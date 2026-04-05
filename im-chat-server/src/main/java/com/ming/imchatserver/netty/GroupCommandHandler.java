@@ -4,10 +4,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ming.imchatserver.application.facade.SocialFacade;
+import com.ming.imchatserver.application.model.GroupMessagePage;
+import com.ming.imchatserver.application.model.GroupMessagePersistResult;
+import com.ming.imchatserver.application.model.GroupMessageView;
 import com.ming.imchatserver.config.NettyProperties;
-import com.ming.imchatserver.dao.GroupMessageDO;
 import com.ming.imchatserver.message.MessageContentCodec;
-import com.ming.imchatserver.service.GroupMessageService;
 
 /**
  * 群组命令处理器。
@@ -59,8 +60,8 @@ public class GroupCommandHandler implements WsCommandHandler {
         resp.put("type", "GROUP_JOIN_RESULT");
         resp.put("groupId", groupId);
         resp.put("success", true);
-        resp.put("joined", result.isJoined());
-        resp.put("idempotent", result.isIdempotent());
+        resp.put("joined", result.joined());
+        resp.put("idempotent", result.idempotent());
         protocolSupport.sendJson(context.channel(), resp);
     }
 
@@ -72,8 +73,8 @@ public class GroupCommandHandler implements WsCommandHandler {
         resp.put("type", "GROUP_QUIT_RESULT");
         resp.put("groupId", groupId);
         resp.put("success", true);
-        resp.put("quit", result.isQuit());
-        resp.put("idempotent", result.isIdempotent());
+        resp.put("quit", result.quit());
+        resp.put("idempotent", result.idempotent());
         protocolSupport.sendJson(context.channel(), resp);
     }
 
@@ -92,13 +93,13 @@ public class GroupCommandHandler implements WsCommandHandler {
         resp.put("type", "GROUP_MEMBER_LIST_RESULT");
         resp.put("groupId", groupId);
         resp.put("success", true);
-        resp.put("hasMore", page.isHasMore());
-        if (page.getNextCursor() == null) {
+        resp.put("hasMore", page.hasMore());
+        if (page.nextCursor() == null) {
             resp.putNull("nextCursor");
         } else {
-            resp.put("nextCursor", page.getNextCursor());
+            resp.put("nextCursor", page.nextCursor());
         }
-        protocolSupport.writeMemberList(resp, page.getItems());
+        protocolSupport.writeMemberList(resp, page.items());
         protocolSupport.sendJson(context.channel(), resp);
     }
 
@@ -108,8 +109,8 @@ public class GroupCommandHandler implements WsCommandHandler {
         String msgType = MessageContentCodec.normalizeMsgType(context.payload().path("msgType").asText(null));
         String content = MessageContentCodec.validateAndSerializeIncomingContent(msgType, context.payload().get("content"));
         String clientMsgId = normalizeClientMsgId(context.payload().path("clientMsgId").asText(null));
-        GroupMessageService.PersistResult persistResult = socialFacade.sendGroupChat(groupId, fromUserId, clientMsgId, msgType, content);
-        GroupMessageDO message = persistResult.getMessage();
+        GroupMessagePersistResult persistResult = socialFacade.sendGroupChat(groupId, fromUserId, clientMsgId, msgType, content);
+        GroupMessageView message = persistResult.message();
         socialFacade.dispatchGroupPush(groupId, message);
     }
 
@@ -126,14 +127,14 @@ public class GroupCommandHandler implements WsCommandHandler {
         if (Long.valueOf(INVALID_GROUP_CURSOR_SEQ).equals(cursorSeq)) {
             return;
         }
-        GroupMessageService.PullResult pullResult = socialFacade.pullGroupOffline(groupId, userId, cursorSeq, limit);
+        GroupMessagePage pullResult = socialFacade.pullGroupOffline(groupId, userId, cursorSeq, limit);
         ObjectNode resp = protocolSupport.mapper().createObjectNode();
         resp.put("type", "GROUP_PULL_OFFLINE_RESULT");
         resp.put("groupId", groupId);
-        resp.put("hasMore", pullResult.isHasMore());
-        protocolSupport.writeGroupSyncProgress(resp, groupId, pullResult.getNextCursorSeq());
+        resp.put("hasMore", pullResult.hasMore());
+        protocolSupport.writeGroupSyncProgress(resp, groupId, pullResult.nextCursorSeq());
         ArrayNode messages = protocolSupport.mapper().createArrayNode();
-        for (GroupMessageDO message : pullResult.getMessages()) {
+        for (GroupMessageView message : pullResult.messages()) {
             ObjectNode item = protocolSupport.mapper().createObjectNode();
             protocolSupport.writeGroupMessageNode(item, message);
             messages.add(item);

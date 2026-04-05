@@ -2,23 +2,38 @@ package com.ming.imchatserver.netty;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ming.imchatserver.application.facade.AuthFacade;
 import com.ming.imchatserver.application.facade.MessageFacade;
+import com.ming.imchatserver.application.facade.SocialFacade;
+import com.ming.imchatserver.application.model.ContactOperationResult;
+import com.ming.imchatserver.application.model.ContactPage;
+import com.ming.imchatserver.application.model.ContactView;
+import com.ming.imchatserver.application.model.GroupJoinResult;
+import com.ming.imchatserver.application.model.GroupMemberPage;
+import com.ming.imchatserver.application.model.GroupMemberView;
+import com.ming.imchatserver.application.model.GroupMessagePage;
+import com.ming.imchatserver.application.model.GroupMessagePersistResult;
+import com.ming.imchatserver.application.model.GroupMessageView;
+import com.ming.imchatserver.application.model.GroupQuitResult;
+import com.ming.imchatserver.application.model.SingleMessagePage;
+import com.ming.imchatserver.application.model.SingleMessageView;
+import com.ming.imchatserver.application.model.SingleSyncCursor;
+import com.ming.imchatserver.application.facade.impl.SocialFacadeImpl;
 import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.config.RateLimitProperties;
 import com.ming.imchatserver.config.RedisStateProperties;
-import com.ming.imchatserver.dao.ContactDO;
-import com.ming.imchatserver.dao.GroupMessageDO;
 import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.metrics.MetricsService;
+import com.ming.imchatserver.service.RateLimitService;
 import com.ming.imchatserver.sensitive.SensitiveWordHitException;
-import com.ming.imchatserver.service.ContactService;
 import com.ming.imchatserver.service.FileTokenBizException;
-import com.ming.imchatserver.service.GroupMessageService;
-import com.ming.imchatserver.service.GroupService;
 import com.ming.imchatserver.service.IdempotencyService;
 import com.ming.imchatserver.service.MessageService;
+import com.ming.imchatserver.service.remote.RemoteContactService;
+import com.ming.imchatserver.service.remote.RemoteGroupMessageService;
+import com.ming.imchatserver.service.remote.RemoteGroupService;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelId;
 import io.netty.channel.ChannelOutboundHandlerAdapter;
@@ -36,6 +51,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -65,9 +81,9 @@ class WebSocketFrameHandlerIntegrationTest {
 
     private ChannelUserManager channelUserManager;
     private MessageService messageService;
-    private ContactService contactService;
-    private GroupService groupService;
-    private GroupMessageService groupMessageService;
+    private RemoteContactService contactService;
+    private RemoteGroupService groupService;
+    private RemoteGroupMessageService groupMessageService;
     private MetricsService metricsService;
     private NettyProperties nettyProperties;
 
@@ -78,9 +94,9 @@ class WebSocketFrameHandlerIntegrationTest {
     void setUp() {
         channelUserManager = mock(ChannelUserManager.class);
         messageService = mock(MessageService.class);
-        contactService = mock(ContactService.class);
-        groupService = mock(GroupService.class);
-        groupMessageService = mock(GroupMessageService.class);
+        contactService = mock(RemoteContactService.class);
+        groupService = mock(RemoteGroupService.class);
+        groupMessageService = mock(RemoteGroupMessageService.class);
         metricsService = mock(MetricsService.class);
         nettyProperties = new NettyProperties();
         nettyProperties.setSyncBatchSize(2);
@@ -105,7 +121,7 @@ class WebSocketFrameHandlerIntegrationTest {
                                              Executor groupPushExecutor,
                                              GroupPushCoordinator groupPushCoordinator,
                                              IdempotencyService idempotencyService,
-                                             com.ming.imchatserver.service.RateLimitService rateLimitService,
+                                             RateLimitService rateLimitService,
                                              RateLimitProperties rateLimitProperties,
                                              RedisStateProperties redisStateProperties) {
         return newHandler(metricsService, groupPushExecutor, groupPushCoordinator, idempotencyService,
@@ -116,16 +132,28 @@ class WebSocketFrameHandlerIntegrationTest {
                                              Executor groupPushExecutor,
                                              GroupPushCoordinator groupPushCoordinator,
                                              IdempotencyService idempotencyService,
-                                             com.ming.imchatserver.service.RateLimitService rateLimitService,
+                                             RateLimitService rateLimitService,
                                              RateLimitProperties rateLimitProperties,
                                              RedisStateProperties redisStateProperties,
                                              Executor businessExecutor) {
-        return new WebSocketFrameHandler(
-                channelUserManager,
-                messageService,
+        SocialFacade socialFacade = new SocialFacadeImpl(
                 contactService,
                 groupService,
                 groupMessageService,
+                channelUserManager,
+                groupPushExecutor,
+                groupPushCoordinator,
+                metricsService,
+                idempotencyService,
+                rateLimitService,
+                rateLimitProperties,
+                redisStateProperties,
+                nettyProperties
+        );
+        return new WebSocketFrameHandler(
+                channelUserManager,
+                messageService,
+                socialFacade,
                 nettyProperties,
                 metricsService,
                 groupPushExecutor,
@@ -165,44 +193,84 @@ class WebSocketFrameHandlerIntegrationTest {
                     throw new SecurityException("not message recipient");
                 }
                 int updated = messageService.updateStatusByServerMsgId(serverMsgId, targetStatus);
-                return new AckReportResult(message, targetStatus, updated, updated > 0 ? new Date() : null);
+                return new AckReportResult(toSingleMessageView(message), targetStatus, updated, updated > 0 ? new Date() : null);
             }
 
             @Override
-            public boolean enqueueStatusNotify(MessageDO message, String status) {
-                return messageService.enqueueStatusNotify(message, status);
+            public boolean enqueueStatusNotify(SingleMessageView message, String status) {
+                return messageService.enqueueStatusNotify(toMessageDO(message), status);
             }
 
             @Override
-            public MessageService.CursorPageResult pullOffline(Long userId, String deviceId, MessageService.SyncCursor syncCursor, int limit) {
-                return syncCursor == null
+            public SingleMessagePage pullOffline(Long userId, String deviceId, SingleSyncCursor syncCursor, int limit) {
+                MessageService.CursorPageResult result = syncCursor == null
                         ? messageService.pullOfflineFromCheckpoint(userId, deviceId, limit)
-                        : messageService.pullOffline(userId, deviceId, syncCursor, limit);
+                        : messageService.pullOffline(userId, deviceId,
+                        new MessageService.SyncCursor(syncCursor.cursorCreatedAt(), syncCursor.cursorId()), limit);
+                return toSingleMessagePage(result);
             }
 
             @Override
-            public MessageService.CursorPageResult loadInitialSync(Long userId, String deviceId, int limit) {
-                return messageService.pullOfflineFromCheckpoint(userId, deviceId, limit);
+            public SingleMessagePage loadInitialSync(Long userId, String deviceId, int limit) {
+                return toSingleMessagePage(messageService.pullOfflineFromCheckpoint(userId, deviceId, limit));
             }
 
             @Override
-            public void advanceSyncCursor(Long userId, String deviceId, MessageService.CursorPageResult pageResult) {
-                if (pageResult == null || pageResult.getNextCursorCreatedAt() == null || pageResult.getNextCursorId() == null) {
+            public void advanceSyncCursor(Long userId, String deviceId, SingleMessagePage pageResult) {
+                if (pageResult == null || pageResult.nextCursorCreatedAt() == null || pageResult.nextCursorId() == null) {
                     return;
                 }
                 messageService.advanceSyncCursor(userId, deviceId,
-                        new MessageService.SyncCursor(pageResult.getNextCursorCreatedAt(), pageResult.getNextCursorId()));
+                        new MessageService.SyncCursor(pageResult.nextCursorCreatedAt(), pageResult.nextCursorId()));
             }
 
             @Override
-            public MessageDO recallMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds) {
-                return messageService.recallMessage(operatorUserId, serverMsgId, recallWindowSeconds);
+            public SingleMessageView recallMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds) {
+                return toSingleMessageView(messageService.recallMessage(operatorUserId, serverMsgId, recallWindowSeconds));
             }
         };
     }
 
     private AuthFacade bridgeAuthFacade() {
-        return (userId, deviceId, limit) -> messageService.pullOfflineFromCheckpoint(userId, deviceId, limit);
+        return (userId, deviceId, limit) -> toSingleMessagePage(messageService.pullOfflineFromCheckpoint(userId, deviceId, limit));
+    }
+
+    private SingleMessageView toSingleMessageView(MessageDO message) {
+        if (message == null) {
+            return null;
+        }
+        return new SingleMessageView(message.getId(), message.getServerMsgId(), message.getClientMsgId(), message.getFromUserId(),
+                message.getToUserId(), message.getMsgType(), message.getContent(), message.getStatus(), message.getCreatedAt(),
+                message.getDeliveredAt(), message.getAckedAt(), message.getRetractedAt(), message.getRetractedBy());
+    }
+
+    private MessageDO toMessageDO(SingleMessageView message) {
+        if (message == null) {
+            return null;
+        }
+        MessageDO target = new MessageDO();
+        target.setId(message.id());
+        target.setServerMsgId(message.serverMsgId());
+        target.setClientMsgId(message.clientMsgId());
+        target.setFromUserId(message.fromUserId());
+        target.setToUserId(message.toUserId());
+        target.setMsgType(message.msgType());
+        target.setContent(message.content());
+        target.setStatus(message.status());
+        target.setCreatedAt(message.createdAt());
+        target.setDeliveredAt(message.deliveredAt());
+        target.setAckedAt(message.ackedAt());
+        target.setRetractedAt(message.retractedAt());
+        target.setRetractedBy(message.retractedBy());
+        return target;
+    }
+
+    private SingleMessagePage toSingleMessagePage(MessageService.CursorPageResult page) {
+        List<SingleMessageView> items = new ArrayList<>();
+        for (MessageDO message : page.getMessages()) {
+            items.add(toSingleMessageView(message));
+        }
+        return new SingleMessagePage(items, page.isHasMore(), page.getNextCursorCreatedAt(), page.getNextCursorId());
     }
 
     @Test
@@ -549,8 +617,7 @@ class WebSocketFrameHandlerIntegrationTest {
     @Test
     void chatShouldRejectWhenContactGuardEnabledAndNoBilateralActiveRelation() throws Exception {
         nettyProperties.setSingleChatRequireActiveContact(true);
-        when(contactService.isActiveContact(1L, 2L)).thenReturn(true);
-        when(contactService.isActiveContact(2L, 1L)).thenReturn(false);
+        when(contactService.isSingleChatAllowed(1L, 2L)).thenReturn(false);
         EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
@@ -565,8 +632,7 @@ class WebSocketFrameHandlerIntegrationTest {
     @Test
     void chatShouldClaimAfterContactValidationAndReleaseOnPersistFailure() throws Exception {
         nettyProperties.setSingleChatRequireActiveContact(true);
-        when(contactService.isActiveContact(1L, 2L)).thenReturn(true);
-        when(contactService.isActiveContact(2L, 1L)).thenReturn(false);
+        when(contactService.isSingleChatAllowed(1L, 2L)).thenReturn(false);
 
         IdempotencyService idempotencyService = mock(IdempotencyService.class);
         RedisStateProperties redisStateProperties = new RedisStateProperties();
@@ -583,7 +649,7 @@ class WebSocketFrameHandlerIntegrationTest {
         verify(idempotencyService, never()).claimClientMessage(anyLong(), anyString(), any());
         verify(idempotencyService, never()).releaseClientMessage(anyLong(), anyString());
 
-        when(contactService.isActiveContact(2L, 1L)).thenReturn(true);
+        when(contactService.isSingleChatAllowed(1L, 2L)).thenReturn(true);
         when(messageService.persistMessage(any(MessageDO.class))).thenThrow(new RuntimeException("db down"));
 
         EmbeddedChannel persistFailChannel = new EmbeddedChannel(newHandler(
@@ -611,7 +677,7 @@ class WebSocketFrameHandlerIntegrationTest {
 
         assertEquals("SERVER_ACK", resp.get("type").asText());
         assertEquals("srv-allow", resp.get("serverMsgId").asText());
-        verify(contactService, never()).isActiveContact(anyLong(), anyLong());
+        verify(contactService, never()).isSingleChatAllowed(anyLong(), anyLong());
     }
 
     @Test
@@ -696,7 +762,7 @@ class WebSocketFrameHandlerIntegrationTest {
 
     @Test
     void contactAddShouldReturnResultAndValidateParams() throws Exception {
-        when(contactService.addOrActivateContact(1L, 2L)).thenReturn(new ContactService.Result(true, false));
+        when(contactService.addOrActivateContact(1L, 2L)).thenReturn(new ContactOperationResult(true, false));
         EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
@@ -720,7 +786,7 @@ class WebSocketFrameHandlerIntegrationTest {
 
     @Test
     void contactRemoveShouldReturnIdempotentResult() throws Exception {
-        when(contactService.removeOrDeactivateContact(1L, 2L)).thenReturn(new ContactService.Result(true, true));
+        when(contactService.removeOrDeactivateContact(1L, 2L)).thenReturn(new ContactOperationResult(true, true));
         EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
@@ -735,12 +801,12 @@ class WebSocketFrameHandlerIntegrationTest {
 
     @Test
     void contactListShouldReturnPageAndValidateParams() throws Exception {
-        ContactDO c1 = contact(1L, 2L, 1, "2026-03-25T00:00:00Z");
-        ContactDO c2 = contact(1L, 3L, 1, "2026-03-25T00:00:01Z");
+        ContactView c1 = contact(1L, 2L, 1, "2026-03-25T00:00:00Z");
+        ContactView c2 = contact(1L, 3L, 1, "2026-03-25T00:00:01Z");
         when(contactService.listActiveContacts(1L, 0L, 2))
-                .thenReturn(new ContactService.ContactPageResult(List.of(c1, c2), 3L, true));
+                .thenReturn(new ContactPage(List.of(c1, c2), 3L, true));
         when(contactService.listActiveContacts(1L, 3L, 2))
-                .thenReturn(new ContactService.ContactPageResult(List.of(), null, false));
+                .thenReturn(new ContactPage(List.of(), null, false));
 
         EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
@@ -826,7 +892,7 @@ class WebSocketFrameHandlerIntegrationTest {
      * 方法说明。
      */
     void groupJoinShouldReturnIdempotentResult() throws Exception {
-        when(groupService.joinGroup(101L, 1L)).thenReturn(new GroupService.JoinGroupResult(true, true));
+        when(groupService.joinGroup(101L, 1L)).thenReturn(new GroupJoinResult(true, true));
         EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
@@ -844,7 +910,7 @@ class WebSocketFrameHandlerIntegrationTest {
      * 方法说明。
      */
     void groupQuitShouldReturnIdempotentResult() throws Exception {
-        when(groupService.quitGroup(101L, 1L)).thenReturn(new GroupService.QuitGroupResult(true, true));
+        when(groupService.quitGroup(101L, 1L)).thenReturn(new GroupQuitResult(true, true));
         EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
@@ -866,15 +932,10 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
         when(groupService.listActiveMemberUserIds(101L)).thenReturn(List.of(1L, 2L));
 
-        GroupMessageDO saved = new GroupMessageDO();
-        saved.setGroupId(101L);
-        saved.setSeq(7L);
-        saved.setServerMsgId("g-srv-7");
-        saved.setFromUserId(1L);
-        saved.setContent("hello-group");
-        saved.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
+        GroupMessageView saved = groupMessage(101L, 7L, "g-srv-7", "c-1", 1L,
+                "TEXT", "hello-group", 1, "2026-03-25T00:00:00Z");
         when(groupMessageService.persistMessage(101L, 1L, "c-1", "TEXT", "hello-group"))
-                .thenReturn(new GroupMessageService.PersistResult(saved));
+                .thenReturn(new GroupMessagePersistResult(saved));
 
         EmbeddedChannel senderChannel = new EmbeddedChannel(newHandler(metricsService));
         senderChannel.attr(NettyAttr.USER_ID).set(1L);
@@ -923,16 +984,11 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
         when(groupService.listActiveMemberUserIds(101L)).thenReturn(List.of(2L));
 
-        GroupMessageDO saved = new GroupMessageDO();
-        saved.setGroupId(101L);
-        saved.setSeq(13L);
-        saved.setServerMsgId("g-srv-file");
-        saved.setFromUserId(1L);
-        saved.setMsgType("FILE");
-        saved.setContent("{\"fileId\":\"f1\",\"fileName\":\"a.txt\",\"size\":12,\"contentType\":\"text/plain\",\"url\":\"/files/f1/a.txt\"}");
-        saved.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
+        GroupMessageView saved = groupMessage(101L, 13L, "g-srv-file", "c-file", 1L,
+                "FILE", "{\"fileId\":\"f1\",\"fileName\":\"a.txt\",\"size\":12,\"contentType\":\"text/plain\",\"url\":\"/files/f1/a.txt\"}",
+                1, "2026-03-25T00:00:00Z");
         when(groupMessageService.persistMessage(eq(101L), eq(1L), eq("c-file"), eq("FILE"), any()))
-                .thenReturn(new GroupMessageService.PersistResult(saved));
+                .thenReturn(new GroupMessagePersistResult(saved));
 
         EmbeddedChannel senderChannel = new EmbeddedChannel(newHandler(metricsService));
         senderChannel.attr(NettyAttr.USER_ID).set(1L);
@@ -1011,25 +1067,22 @@ class WebSocketFrameHandlerIntegrationTest {
         when(channelUserManager.getChannels(3L)).thenReturn(List.of(member3));
         when(groupService.listActiveMemberUserIds(101L)).thenReturn(List.of(2L, 3L));
 
-        GroupMessageDO existing = new GroupMessageDO();
-        existing.setGroupId(101L);
-        existing.setSeq(61L);
-        existing.setServerMsgId("g-recall-1");
-        existing.setFromUserId(1L);
-        existing.setMsgType("TEXT");
-        existing.setContent("hello");
-        existing.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
-
-        GroupMessageDO recalled = new GroupMessageDO();
-        recalled.setGroupId(101L);
-        recalled.setSeq(61L);
-        recalled.setServerMsgId("g-recall-1");
-        recalled.setFromUserId(1L);
-        recalled.setMsgType("TEXT");
-        recalled.setStatus(2);
-        recalled.setCreatedAt(existing.getCreatedAt());
-        recalled.setRetractedAt(Date.from(Instant.parse("2026-03-25T00:01:00Z")));
-        recalled.setRetractedBy(1L);
+        GroupMessageView existing = groupMessage(101L, 61L, "g-recall-1", null, 1L,
+                "TEXT", "hello", 1, "2026-03-25T00:00:00Z");
+        GroupMessageView recalled = new GroupMessageView(
+                existing.id(),
+                existing.groupId(),
+                existing.seq(),
+                existing.serverMsgId(),
+                existing.clientMsgId(),
+                existing.fromUserId(),
+                existing.msgType(),
+                null,
+                2,
+                existing.createdAt(),
+                Date.from(Instant.parse("2026-03-25T00:01:00Z")),
+                1L
+        );
 
         when(groupMessageService.findByServerMsgId("g-recall-1")).thenReturn(existing);
         when(groupMessageService.recallMessage(1L, "g-recall-1", 120L)).thenReturn(recalled);
@@ -1105,15 +1158,10 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
         when(groupService.listActiveMemberUserIds(101L)).thenReturn(List.of(1L, 2L, 3L));
 
-        GroupMessageDO saved = new GroupMessageDO();
-        saved.setGroupId(101L);
-        saved.setSeq(10L);
-        saved.setServerMsgId("g-srv-10");
-        saved.setFromUserId(1L);
-        saved.setContent("parallel-batch");
-        saved.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
+        GroupMessageView saved = groupMessage(101L, 10L, "g-srv-10", null, 1L,
+                "TEXT", "parallel-batch", 1, "2026-03-25T00:00:00Z");
         when(groupMessageService.persistMessage(101L, 1L, null, "TEXT", "parallel-batch"))
-                .thenReturn(new GroupMessageService.PersistResult(saved));
+                .thenReturn(new GroupMessagePersistResult(saved));
 
         List<Runnable> submittedTasks = new ArrayList<>();
         EmbeddedChannel senderChannel = new EmbeddedChannel(newHandler(metricsService, submittedTasks::add));
@@ -1143,26 +1191,15 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
         when(groupService.listActiveMemberUserIds(101L)).thenReturn(List.of(2L));
 
-        GroupMessageDO first = new GroupMessageDO();
-        first.setGroupId(101L);
-        first.setSeq(11L);
-        first.setServerMsgId("g-srv-11");
-        first.setFromUserId(1L);
-        first.setContent("m1");
-        first.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
-
-        GroupMessageDO second = new GroupMessageDO();
-        second.setGroupId(101L);
-        second.setSeq(12L);
-        second.setServerMsgId("g-srv-12");
-        second.setFromUserId(1L);
-        second.setContent("m2");
-        second.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:01Z")));
+        GroupMessageView first = groupMessage(101L, 11L, "g-srv-11", null, 1L,
+                "TEXT", "m1", 1, "2026-03-25T00:00:00Z");
+        GroupMessageView second = groupMessage(101L, 12L, "g-srv-12", null, 1L,
+                "TEXT", "m2", 1, "2026-03-25T00:00:01Z");
 
         when(groupMessageService.persistMessage(101L, 1L, null, "TEXT", "m1"))
-                .thenReturn(new GroupMessageService.PersistResult(first));
+                .thenReturn(new GroupMessagePersistResult(first));
         when(groupMessageService.persistMessage(101L, 1L, null, "TEXT", "m2"))
-                .thenReturn(new GroupMessageService.PersistResult(second));
+                .thenReturn(new GroupMessagePersistResult(second));
 
         List<Runnable> submittedTasks = new ArrayList<>();
         GroupPushCoordinator coordinator = new GroupPushCoordinator();
@@ -1196,15 +1233,10 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
         when(groupService.listActiveMemberUserIds(101L)).thenReturn(List.of(2L));
 
-        GroupMessageDO saved = new GroupMessageDO();
-        saved.setGroupId(101L);
-        saved.setSeq(8L);
-        saved.setServerMsgId("g-srv-8");
-        saved.setFromUserId(1L);
-        saved.setContent("boom");
-        saved.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
+        GroupMessageView saved = groupMessage(101L, 8L, "g-srv-8", null, 1L,
+                "TEXT", "boom", 1, "2026-03-25T00:00:00Z");
         when(groupMessageService.persistMessage(101L, 1L, null, "TEXT", "boom"))
-                .thenReturn(new GroupMessageService.PersistResult(saved));
+                .thenReturn(new GroupMessagePersistResult(saved));
 
         EmbeddedChannel senderChannel = new EmbeddedChannel(newHandler(metricsService, Runnable::run));
         senderChannel.attr(NettyAttr.USER_ID).set(1L);
@@ -1228,15 +1260,10 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
         when(groupService.listActiveMemberUserIds(101L)).thenReturn(List.of(2L, 3L, 4L));
 
-        GroupMessageDO saved = new GroupMessageDO();
-        saved.setGroupId(101L);
-        saved.setSeq(9L);
-        saved.setServerMsgId("g-srv-9");
-        saved.setFromUserId(1L);
-        saved.setContent("degrade");
-        saved.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
+        GroupMessageView saved = groupMessage(101L, 9L, "g-srv-9", null, 1L,
+                "TEXT", "degrade", 1, "2026-03-25T00:00:00Z");
         when(groupMessageService.persistMessage(101L, 1L, null, "TEXT", "degrade"))
-                .thenReturn(new GroupMessageService.PersistResult(saved));
+                .thenReturn(new GroupMessagePersistResult(saved));
 
         List<Runnable> acceptedTasks = new ArrayList<>();
         AtomicInteger executeCount = new AtomicInteger(0);
@@ -1279,7 +1306,7 @@ class WebSocketFrameHandlerIntegrationTest {
 
     @Test
     void groupQuitThenChatShouldBeRejected() throws Exception {
-        when(groupService.quitGroup(101L, 1L)).thenReturn(new GroupService.QuitGroupResult(true, false));
+        when(groupService.quitGroup(101L, 1L)).thenReturn(new GroupQuitResult(true, false));
         when(groupService.isActiveMember(101L, 1L)).thenReturn(false);
 
         EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
@@ -1299,22 +1326,12 @@ class WebSocketFrameHandlerIntegrationTest {
     @Test
     void groupPullOfflineShouldUseCursorAndReturnResult() throws Exception {
         when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
-        GroupMessageDO m1 = new GroupMessageDO();
-        m1.setGroupId(101L);
-        m1.setSeq(11L);
-        m1.setServerMsgId("g11");
-        m1.setFromUserId(2L);
-        m1.setContent("a");
-        m1.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
-        GroupMessageDO m2 = new GroupMessageDO();
-        m2.setGroupId(101L);
-        m2.setSeq(12L);
-        m2.setServerMsgId("g12");
-        m2.setFromUserId(3L);
-        m2.setContent("b");
-        m2.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:01Z")));
+        GroupMessageView m1 = groupMessage(101L, 11L, "g11", null, 2L,
+                "TEXT", "a", 1, "2026-03-25T00:00:00Z");
+        GroupMessageView m2 = groupMessage(101L, 12L, "g12", null, 3L,
+                "TEXT", "b", 1, "2026-03-25T00:00:01Z");
         when(groupMessageService.pullOffline(101L, 1L, null, 2))
-                .thenReturn(new GroupMessageService.PullResult(List.of(m1, m2), false, 12L));
+                .thenReturn(new GroupMessagePage(List.of(m1, m2), false, 12L));
 
         EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
@@ -1332,16 +1349,11 @@ class WebSocketFrameHandlerIntegrationTest {
     @Test
     void groupPullOfflineShouldReturnStructuredFileContent() throws Exception {
         when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
-        GroupMessageDO fileMessage = new GroupMessageDO();
-        fileMessage.setGroupId(101L);
-        fileMessage.setSeq(31L);
-        fileMessage.setServerMsgId("g31");
-        fileMessage.setFromUserId(2L);
-        fileMessage.setMsgType("FILE");
-        fileMessage.setContent("{\"fileId\":\"f31\",\"fileName\":\"report.pdf\",\"size\":1024,\"contentType\":\"application/pdf\",\"url\":\"/files/f31/report.pdf\"}");
-        fileMessage.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
+        GroupMessageView fileMessage = groupMessage(101L, 31L, "g31", null, 2L,
+                "FILE", "{\"fileId\":\"f31\",\"fileName\":\"report.pdf\",\"size\":1024,\"contentType\":\"application/pdf\",\"url\":\"/files/f31/report.pdf\"}",
+                1, "2026-03-25T00:00:00Z");
         when(groupMessageService.pullOffline(101L, 1L, null, 1))
-                .thenReturn(new GroupMessageService.PullResult(List.of(fileMessage), false, 31L));
+                .thenReturn(new GroupMessagePage(List.of(fileMessage), false, 31L));
 
         EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
@@ -1356,18 +1368,14 @@ class WebSocketFrameHandlerIntegrationTest {
     @Test
     void groupPullOfflineShouldMaskRetractedMessageContent() throws Exception {
         when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
-        GroupMessageDO recalled = new GroupMessageDO();
-        recalled.setGroupId(101L);
-        recalled.setSeq(41L);
-        recalled.setServerMsgId("g41");
-        recalled.setFromUserId(2L);
-        recalled.setMsgType("TEXT");
-        recalled.setStatus(2);
-        recalled.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
-        recalled.setRetractedAt(Date.from(Instant.parse("2026-03-25T00:01:00Z")));
-        recalled.setRetractedBy(2L);
+        GroupMessageView recalled = new GroupMessageView(
+                null, 101L, 41L, "g41", null, 2L, "TEXT", null, 2,
+                Date.from(Instant.parse("2026-03-25T00:00:00Z")),
+                Date.from(Instant.parse("2026-03-25T00:01:00Z")),
+                2L
+        );
         when(groupMessageService.pullOffline(101L, 1L, null, 1))
-                .thenReturn(new GroupMessageService.PullResult(List.of(recalled), false, 41L));
+                .thenReturn(new GroupMessagePage(List.of(recalled), false, 41L));
 
         EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
@@ -1383,22 +1391,12 @@ class WebSocketFrameHandlerIntegrationTest {
     @Test
     void groupPullOfflineShouldKeepAscOrderAndCursorWhenHasMore() throws Exception {
         when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
-        GroupMessageDO m1 = new GroupMessageDO();
-        m1.setGroupId(101L);
-        m1.setSeq(21L);
-        m1.setServerMsgId("g21");
-        m1.setFromUserId(2L);
-        m1.setContent("x");
-        m1.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
-        GroupMessageDO m2 = new GroupMessageDO();
-        m2.setGroupId(101L);
-        m2.setSeq(22L);
-        m2.setServerMsgId("g22");
-        m2.setFromUserId(3L);
-        m2.setContent("y");
-        m2.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:01Z")));
+        GroupMessageView m1 = groupMessage(101L, 21L, "g21", null, 2L,
+                "TEXT", "x", 1, "2026-03-25T00:00:00Z");
+        GroupMessageView m2 = groupMessage(101L, 22L, "g22", null, 3L,
+                "TEXT", "y", 1, "2026-03-25T00:00:01Z");
         when(groupMessageService.pullOffline(101L, 1L, 20L, 2))
-                .thenReturn(new GroupMessageService.PullResult(List.of(m1, m2), true, 22L));
+                .thenReturn(new GroupMessagePage(List.of(m1, m2), true, 22L));
 
         EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
@@ -1444,14 +1442,34 @@ class WebSocketFrameHandlerIntegrationTest {
         return new MessageService.CursorPageResult(new ArrayList<>(messages), hasMore, cursorCreatedAt, cursorId);
     }
 
-    private ContactDO contact(Long ownerUserId, Long peerUserId, Integer relationStatus, String updatedAt) {
-        ContactDO contact = new ContactDO();
-        contact.setOwnerUserId(ownerUserId);
-        contact.setPeerUserId(peerUserId);
-        contact.setRelationStatus(relationStatus);
-        contact.setCreatedAt(Date.from(Instant.parse(updatedAt)));
-        contact.setUpdatedAt(Date.from(Instant.parse(updatedAt)));
-        return contact;
+    private ContactView contact(Long ownerUserId, Long peerUserId, Integer relationStatus, String updatedAt) {
+        Date instant = Date.from(Instant.parse(updatedAt));
+        return new ContactView(ownerUserId, peerUserId, relationStatus, null, null, instant, instant);
+    }
+
+    private GroupMessageView groupMessage(Long groupId,
+                                          Long seq,
+                                          String serverMsgId,
+                                          String clientMsgId,
+                                          Long fromUserId,
+                                          String msgType,
+                                          String content,
+                                          Integer status,
+                                          String createdAt) {
+        return new GroupMessageView(
+                null,
+                groupId,
+                seq,
+                serverMsgId,
+                clientMsgId,
+                fromUserId,
+                msgType,
+                content,
+                status,
+                Date.from(Instant.parse(createdAt)),
+                null,
+                null
+        );
     }
     /**
      * 方法说明。

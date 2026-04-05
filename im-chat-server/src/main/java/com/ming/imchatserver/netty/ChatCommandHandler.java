@@ -5,10 +5,11 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ming.imchatserver.application.facade.MessageFacade;
 import com.ming.imchatserver.application.facade.SocialFacade;
+import com.ming.imchatserver.application.model.SingleMessagePage;
+import com.ming.imchatserver.application.model.SingleMessageView;
+import com.ming.imchatserver.application.model.SingleSyncCursor;
 import com.ming.imchatserver.config.NettyProperties;
-import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.message.MessageContentCodec;
-import com.ming.imchatserver.service.MessageService;
 import io.netty.channel.Channel;
 
 import java.time.Instant;
@@ -19,7 +20,7 @@ import java.time.Instant;
 public class ChatCommandHandler implements WsCommandHandler {
 
     private static final int DEFAULT_PULL_MAX_LIMIT = 200;
-    private static final MessageService.SyncCursor INVALID_SINGLE_SYNC_CURSOR = new MessageService.SyncCursor(null, -1L);
+    private static final SingleSyncCursor INVALID_SINGLE_SYNC_CURSOR = new SingleSyncCursor(null, -1L);
 
     private final MessageFacade messageFacade;
     private final SocialFacade socialFacade;
@@ -106,15 +107,15 @@ public class ChatCommandHandler implements WsCommandHandler {
             notify.put("type", "MSG_STATUS_NOTIFY");
             notify.put("serverMsgId", serverMsgId);
             notify.put("status", targetStatus);
-            notify.put("toUserId", result.message().getToUserId());
+            notify.put("toUserId", result.message().toUserId());
             String payload = protocolSupport.mapper().writeValueAsString(notify);
-            for (Channel channel : channelUserManager.getChannels(result.message().getFromUserId())) {
+            for (Channel channel : channelUserManager.getChannels(result.message().fromUserId())) {
                 channel.writeAndFlush(new io.netty.handler.codec.http.websocketx.TextWebSocketFrame(payload));
             }
         }
     }
 
-    private boolean enqueueDistributedNotify(MessageDO message, String status) {
+    private boolean enqueueDistributedNotify(SingleMessageView message, String status) {
         return messageFacade.enqueueStatusNotify(message, status);
     }
 
@@ -130,17 +131,17 @@ public class ChatCommandHandler implements WsCommandHandler {
         if (limit < 1 || limit > maxLimit) {
             throw new IllegalArgumentException("limit must be between 1 and " + maxLimit);
         }
-        MessageService.SyncCursor syncCursor = parseSingleSyncCursor(node, deviceId);
+        SingleSyncCursor syncCursor = parseSingleSyncCursor(node, deviceId);
         if (syncCursor == INVALID_SINGLE_SYNC_CURSOR) {
             return;
         }
-        MessageService.CursorPageResult pageResult = messageFacade.pullOffline(userId, deviceId, syncCursor, limit);
+        SingleMessagePage pageResult = messageFacade.pullOffline(userId, deviceId, syncCursor, limit);
         ObjectNode resp = protocolSupport.mapper().createObjectNode();
         resp.put("type", "PULL_OFFLINE_RESULT");
-        resp.put("hasMore", pageResult.isHasMore());
-        protocolSupport.writeSingleSyncProgress(resp, deviceId, null, pageResult.getNextCursorCreatedAt(), pageResult.getNextCursorId());
+        resp.put("hasMore", pageResult.hasMore());
+        protocolSupport.writeSingleSyncProgress(resp, deviceId, pageResult.nextCursorCreatedAt(), pageResult.nextCursorId());
         ArrayNode arr = protocolSupport.mapper().createArrayNode();
-        for (MessageDO message : pageResult.getMessages()) {
+        for (SingleMessageView message : pageResult.messages()) {
             ObjectNode item = protocolSupport.mapper().createObjectNode();
             protocolSupport.writeSingleMessageNode(item, message);
             arr.add(item);
@@ -154,7 +155,7 @@ public class ChatCommandHandler implements WsCommandHandler {
                 });
     }
 
-    private MessageService.SyncCursor parseSingleSyncCursor(JsonNode node, String currentDeviceId) {
+    private SingleSyncCursor parseSingleSyncCursor(JsonNode node, String currentDeviceId) {
         JsonNode syncToken = node.get("syncToken");
         String cursorCreatedAtStr;
         Long cursorId;
@@ -188,7 +189,7 @@ public class ChatCommandHandler implements WsCommandHandler {
             return null;
         }
         try {
-            return new MessageService.SyncCursor(java.util.Date.from(Instant.parse(cursorCreatedAtStr)), cursorId);
+            return new SingleSyncCursor(java.util.Date.from(Instant.parse(cursorCreatedAtStr)), cursorId);
         } catch (Exception ex) {
             throw new IllegalArgumentException("cursorCreatedAt must be ISO-8601 instant");
         }

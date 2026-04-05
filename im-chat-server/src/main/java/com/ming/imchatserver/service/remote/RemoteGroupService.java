@@ -14,12 +14,14 @@ import com.ming.imapicontract.social.GroupMemberListRequest;
 import com.ming.imapicontract.social.GroupMemberListResponse;
 import com.ming.imapicontract.social.GroupQuitRequest;
 import com.ming.imapicontract.social.GroupQuitResponse;
+import com.ming.imchatserver.application.model.GroupJoinResult;
+import com.ming.imchatserver.application.model.GroupMemberPage;
+import com.ming.imchatserver.application.model.GroupMemberView;
+import com.ming.imchatserver.application.model.GroupQuitResult;
 import com.ming.imchatserver.config.SocialRouteProperties;
-import com.ming.imchatserver.dao.GroupMemberDO;
 import com.ming.imchatserver.remote.social.SocialServiceClient;
 import com.ming.imchatserver.service.GroupBizException;
 import com.ming.imchatserver.service.GroupErrorCode;
-import com.ming.imchatserver.service.GroupService;
 import com.ming.imchatserver.service.SocialRpcException;
 import com.ming.imchatserver.service.support.SocialCacheSupport;
 import org.springframework.stereotype.Component;
@@ -46,55 +48,46 @@ public class RemoteGroupService {
         this.socialRouteProperties = socialRouteProperties;
     }
 
-    public GroupService.CreateGroupResult createGroup(Long ownerUserId, String name, Integer memberLimit) {
+    public record CreateGroupResult(Long groupId, String groupNo) {
+    }
+
+    public CreateGroupResult createGroup(Long ownerUserId, String name, Integer memberLimit) {
         GroupCreateResponse response = unwrap(call(() ->
                 socialServiceClient.createGroup(new GroupCreateRequest(ownerUserId, name, memberLimit))));
         if (response == null) {
             throw new SocialRpcException("REMOTE_UNAVAILABLE", "social service response is null");
         }
         socialCacheSupport.invalidateGroup(response.groupId());
-        return new GroupService.CreateGroupResult(response.groupId(), response.groupNo());
+        return new CreateGroupResult(response.groupId(), response.groupNo());
     }
 
-    public GroupService.JoinGroupResult joinGroup(Long groupId, Long userId) {
+    public GroupJoinResult joinGroup(Long groupId, Long userId) {
         GroupJoinResponse response = unwrap(call(() ->
                 socialServiceClient.joinGroup(new GroupJoinRequest(groupId, userId))));
         socialCacheSupport.invalidateGroup(groupId);
-        return new GroupService.JoinGroupResult(response.joined(), response.idempotent());
+        return new GroupJoinResult(response.joined(), response.idempotent());
     }
 
-    public GroupService.QuitGroupResult quitGroup(Long groupId, Long userId) {
+    public GroupQuitResult quitGroup(Long groupId, Long userId) {
         GroupQuitResponse response = unwrap(call(() ->
                 socialServiceClient.quitGroup(new GroupQuitRequest(groupId, userId))));
         socialCacheSupport.invalidateGroup(groupId);
-        return new GroupService.QuitGroupResult(response.quit(), response.idempotent());
+        return new GroupQuitResult(response.quit(), response.idempotent());
     }
 
-    public GroupService.MemberPageResult listMembers(Long groupId, Long cursorUserId, Integer limit) {
+    public GroupMemberPage listMembers(Long groupId, Long cursorUserId, Integer limit) {
         GroupMemberListResponse response = unwrap(call(() ->
                 socialServiceClient.listGroupMembers(new GroupMemberListRequest(groupId, cursorUserId, limit))));
-        List<GroupMemberDO> items = new ArrayList<>();
+        List<GroupMemberView> items = new ArrayList<>();
         for (GroupMemberDTO item : response.items()) {
-            items.add(toGroupMemberDO(item));
+            items.add(toGroupMemberView(item));
         }
-        return new GroupService.MemberPageResult(items, response.nextCursor(), response.hasMore());
+        return new GroupMemberPage(items, response.nextCursor(), response.hasMore());
     }
 
     public boolean isActiveMember(Long groupId, Long userId) {
         List<Long> memberIds = getGroupMemberIds(groupId, false);
         return memberIds.contains(userId);
-    }
-
-    public GroupMemberDO getActiveMember(Long groupId, Long userId) {
-        List<Long> memberIds = getGroupMemberIds(groupId, false);
-        if (!memberIds.contains(userId)) {
-            return null;
-        }
-        GroupMemberDO target = new GroupMemberDO();
-        target.setGroupId(groupId);
-        target.setUserId(userId);
-        target.setMemberStatus(1);
-        return target;
     }
 
     public boolean canRecallMessage(Long groupId, Long operatorUserId, Long targetUserId) {
@@ -146,17 +139,17 @@ public class RemoteGroupService {
         throw mapToException(response);
     }
 
-    private GroupMemberDO toGroupMemberDO(GroupMemberDTO item) {
-        GroupMemberDO target = new GroupMemberDO();
-        target.setGroupId(item.groupId());
-        target.setUserId(item.userId());
-        target.setRole(item.role());
-        target.setMemberStatus(item.memberStatus());
-        target.setJoinedAt(item.joinedAt());
-        target.setMutedUntil(item.mutedUntil());
-        target.setCreatedAt(item.createdAt());
-        target.setUpdatedAt(item.updatedAt());
-        return target;
+    private GroupMemberView toGroupMemberView(GroupMemberDTO item) {
+        return new GroupMemberView(
+                item.groupId(),
+                item.userId(),
+                item.role(),
+                item.memberStatus(),
+                item.joinedAt(),
+                item.mutedUntil(),
+                item.createdAt(),
+                item.updatedAt()
+        );
     }
 
     private <T> T unwrap(ApiResponse<T> response) {

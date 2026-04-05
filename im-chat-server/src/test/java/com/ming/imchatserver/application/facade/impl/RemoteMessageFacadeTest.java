@@ -7,8 +7,8 @@ import com.ming.imapicontract.message.PersistSingleMessageResponse;
 import com.ming.imapicontract.message.PullOfflineResponse;
 import com.ming.imapicontract.message.RecallSingleMessageResponse;
 import com.ming.imchatserver.application.facade.MessageFacade;
+import com.ming.imchatserver.application.model.SingleMessagePage;
 import com.ming.imchatserver.remote.message.MessageServiceClient;
-import com.ming.imchatserver.service.MessageService;
 import org.junit.jupiter.api.Test;
 
 import java.util.Date;
@@ -42,12 +42,12 @@ class RemoteMessageFacadeTest {
 
         MessageFacade.ChatPersistResult persistResult = facade.sendChat(1L, 2L, "c-1", "TEXT", "hello");
         MessageFacade.AckReportResult ackResult = facade.reportAck(2L, "srv-1", "ACKED");
-        MessageService.CursorPageResult pageResult = facade.pullOffline(2L, "ios-1", null, 20);
+        SingleMessagePage pageResult = facade.pullOffline(2L, "ios-1", null, 20);
 
         assertEquals("srv-1", persistResult.serverMsgId());
         assertSame("ACKED", ackResult.status());
-        assertEquals(1, pageResult.getMessages().size());
-        assertEquals("srv-1", facade.recallMessage(1L, "srv-1", 120L).getServerMsgId());
+        assertEquals(1, pageResult.messages().size());
+        assertEquals("srv-1", facade.recallMessage(1L, "srv-1", 120L).serverMsgId());
 
         verify(messageServiceClient).persistSingleMessage(any());
         verify(messageServiceClient).ackMessageStatus(any());

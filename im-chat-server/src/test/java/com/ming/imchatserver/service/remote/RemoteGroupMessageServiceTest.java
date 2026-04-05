@@ -6,9 +6,10 @@ import com.ming.imapicontract.message.GroupMessageDTO;
 import com.ming.imapicontract.message.PersistGroupMessageResponse;
 import com.ming.imapicontract.message.PullGroupOfflineResponse;
 import com.ming.imapicontract.message.RecallGroupMessageResponse;
-import com.ming.imchatserver.dao.GroupMessageDO;
+import com.ming.imchatserver.application.model.GroupMessagePage;
+import com.ming.imchatserver.application.model.GroupMessagePersistResult;
+import com.ming.imchatserver.application.model.GroupMessageView;
 import com.ming.imchatserver.remote.message.MessageServiceClient;
-import com.ming.imchatserver.service.GroupMessageService;
 import org.junit.jupiter.api.Test;
 
 import java.util.Date;
@@ -38,16 +39,16 @@ class RemoteGroupMessageServiceTest {
         when(messageServiceClient.recallGroupMessage(any()))
                 .thenReturn(ApiResponse.success(new RecallGroupMessageResponse(dto)));
 
-        GroupMessageService.PersistResult persistResult = service.persistMessage(101L, 1L, "c-1", "TEXT", "hello");
-        GroupMessageService.PullResult pullResult = service.pullOffline(101L, 1L, null, 20);
-        GroupMessageDO queried = service.findByServerMsgId("srv-1");
-        GroupMessageDO recalled = service.recallMessage(1L, "srv-1", 120L);
+        GroupMessagePersistResult persistResult = service.persistMessage(101L, 1L, "c-1", "TEXT", "hello");
+        GroupMessagePage pullResult = service.pullOffline(101L, 1L, null, 20);
+        GroupMessageView queried = service.findByServerMsgId("srv-1");
+        GroupMessageView recalled = service.recallMessage(1L, "srv-1", 120L);
 
-        assertEquals(101L, persistResult.getMessage().getGroupId());
-        assertEquals(1, pullResult.getMessages().size());
-        assertEquals(8L, pullResult.getNextCursorSeq());
+        assertEquals(101L, persistResult.message().groupId());
+        assertEquals(1, pullResult.messages().size());
+        assertEquals(8L, pullResult.nextCursorSeq());
         assertNotNull(queried);
-        assertEquals("srv-1", queried.getServerMsgId());
-        assertEquals("srv-1", recalled.getServerMsgId());
+        assertEquals("srv-1", queried.serverMsgId());
+        assertEquals("srv-1", recalled.serverMsgId());
     }
 }

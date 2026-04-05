@@ -1,7 +1,8 @@
 package com.ming.imchatserver.application.facade;
 
-import com.ming.imchatserver.dao.MessageDO;
-import com.ming.imchatserver.service.MessageService;
+import com.ming.imchatserver.application.model.SingleMessagePage;
+import com.ming.imchatserver.application.model.SingleMessageView;
+import com.ming.imchatserver.application.model.SingleSyncCursor;
 
 import java.util.Date;
 
@@ -18,22 +19,19 @@ public interface MessageFacade {
 
     AckReportResult reportAck(Long reporterUserId, String serverMsgId, String targetStatus);
 
-    boolean enqueueStatusNotify(MessageDO message, String status);
+    boolean enqueueStatusNotify(SingleMessageView message, String status);
 
-    MessageService.CursorPageResult pullOffline(Long userId,
-                                                String deviceId,
-                                                MessageService.SyncCursor syncCursor,
-                                                int limit);
+    SingleMessagePage pullOffline(Long userId, String deviceId, SingleSyncCursor syncCursor, int limit);
 
-    MessageService.CursorPageResult loadInitialSync(Long userId, String deviceId, int limit);
+    SingleMessagePage loadInitialSync(Long userId, String deviceId, int limit);
 
-    void advanceSyncCursor(Long userId, String deviceId, MessageService.CursorPageResult pageResult);
+    void advanceSyncCursor(Long userId, String deviceId, SingleMessagePage pageResult);
 
-    MessageDO recallMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds);
+    SingleMessageView recallMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds);
 
     record ChatPersistResult(String clientMsgId, String serverMsgId, boolean createdNew) {
     }
 
-    record AckReportResult(MessageDO message, String status, int updated, Date ackAt) {
+    record AckReportResult(SingleMessageView message, String status, int updated, Date ackAt) {
     }
 }
