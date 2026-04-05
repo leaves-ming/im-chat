@@ -50,7 +50,6 @@ public class NettyWebSocketServer {
     private final NettyProperties properties;
     private final AuthService authService;
     private final ChannelUserManager channelUserManager;
-    private final com.ming.imchatserver.service.MessageService messageService;
     private final ContactService contactService;
     private final GroupService groupService;
     private final GroupMessageService groupMessageService;
@@ -88,7 +87,6 @@ public class NettyWebSocketServer {
     public NettyWebSocketServer(NettyProperties properties,
                                 AuthService authService,
                                 ChannelUserManager channelUserManager,
-                                com.ming.imchatserver.service.MessageService messageService,
                                 ContactService contactService,
                                 GroupService groupService,
                                 GroupMessageService groupMessageService,
@@ -112,7 +110,6 @@ public class NettyWebSocketServer {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
-        this.messageService = messageService;
         this.contactService = contactService;
         this.groupService = groupService;
         this.groupMessageService = groupMessageService;
@@ -148,7 +145,7 @@ public class NettyWebSocketServer {
         b.group(bossGroup, workerGroup)
                 .channel(NioServerSocketChannel.class)
                 .localAddress(new InetSocketAddress(properties.getPort()))
-                .childHandler(new NettyServerInitializer(properties, authService, channelUserManager, messageService,
+                .childHandler(new NettyServerInitializer(properties, authService, channelUserManager,
                         contactService, groupService, groupMessageService, deliveryMapper, metricsService,
                         fileService, fileStorageProperties, groupPushExecutor, groupPushCoordinator,
                         idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,

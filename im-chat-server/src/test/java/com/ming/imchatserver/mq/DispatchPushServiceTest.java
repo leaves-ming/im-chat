@@ -6,7 +6,6 @@ import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imchatserver.netty.ChannelUserManager;
 import com.ming.imchatserver.service.GroupMessageService;
 import com.ming.imchatserver.service.GroupService;
-import com.ming.imchatserver.service.MessageService;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import org.junit.jupiter.api.Test;
@@ -27,7 +26,6 @@ class DispatchPushServiceTest {
     @Test
     void dispatchSingleShouldHandleExplicitRecallEvent() throws Exception {
         ChannelUserManager channelUserManager = mock(ChannelUserManager.class);
-        MessageService messageService = mock(MessageService.class);
         GroupMessageService groupMessageService = mock(GroupMessageService.class);
         GroupService groupService = mock(GroupService.class);
         EmbeddedChannel recipient = new EmbeddedChannel();
@@ -37,7 +35,7 @@ class DispatchPushServiceTest {
 
         RedisStateProperties redisStateProperties = new RedisStateProperties();
         redisStateProperties.setServerId("node-b");
-        DispatchPushService service = new DispatchPushService(channelUserManager, messageService, groupMessageService, groupService, redisStateProperties);
+        DispatchPushService service = new DispatchPushService(channelUserManager, groupMessageService, groupService, redisStateProperties);
         DispatchMessagePayload payload = new DispatchMessagePayload();
         payload.setEventType(DispatchMessagePayload.EVENT_TYPE_RECALL);
         payload.setOriginServerId("node-a");
@@ -73,7 +71,6 @@ class DispatchPushServiceTest {
     @Test
     void dispatchSingleShouldSkipSenderOnOriginNodeForRecallEvent() throws Exception {
         ChannelUserManager channelUserManager = mock(ChannelUserManager.class);
-        MessageService messageService = mock(MessageService.class);
         GroupMessageService groupMessageService = mock(GroupMessageService.class);
         GroupService groupService = mock(GroupService.class);
         EmbeddedChannel recipient = new EmbeddedChannel();
@@ -83,7 +80,7 @@ class DispatchPushServiceTest {
 
         RedisStateProperties redisStateProperties = new RedisStateProperties();
         redisStateProperties.setServerId("node-a");
-        DispatchPushService service = new DispatchPushService(channelUserManager, messageService, groupMessageService, groupService, redisStateProperties);
+        DispatchPushService service = new DispatchPushService(channelUserManager, groupMessageService, groupService, redisStateProperties);
 
         DispatchMessagePayload payload = new DispatchMessagePayload();
         payload.setEventType(DispatchMessagePayload.EVENT_TYPE_RECALL);
@@ -108,13 +105,12 @@ class DispatchPushServiceTest {
     @Test
     void dispatchSingleShouldDeliverStatusNotifyToSender() throws Exception {
         ChannelUserManager channelUserManager = mock(ChannelUserManager.class);
-        MessageService messageService = mock(MessageService.class);
         GroupMessageService groupMessageService = mock(GroupMessageService.class);
         GroupService groupService = mock(GroupService.class);
         EmbeddedChannel sender = new EmbeddedChannel();
         when(channelUserManager.getChannels(1L)).thenReturn(List.of(sender));
 
-        DispatchPushService service = new DispatchPushService(channelUserManager, messageService, groupMessageService, groupService, new RedisStateProperties());
+        DispatchPushService service = new DispatchPushService(channelUserManager, groupMessageService, groupService, new RedisStateProperties());
         DispatchMessagePayload payload = new DispatchMessagePayload();
         payload.setEventType(DispatchMessagePayload.EVENT_TYPE_STATUS_NOTIFY);
         payload.setServerMsgId("srv-s1");
@@ -134,7 +130,6 @@ class DispatchPushServiceTest {
     @Test
     void dispatchGroupRecallShouldNotSkipOriginNodeMembers() throws Exception {
         ChannelUserManager channelUserManager = mock(ChannelUserManager.class);
-        MessageService messageService = mock(MessageService.class);
         GroupMessageService groupMessageService = mock(GroupMessageService.class);
         GroupService groupService = mock(GroupService.class);
         EmbeddedChannel member1 = new EmbeddedChannel();
@@ -145,7 +140,7 @@ class DispatchPushServiceTest {
 
         RedisStateProperties redisStateProperties = new RedisStateProperties();
         redisStateProperties.setServerId("node-a");
-        DispatchPushService service = new DispatchPushService(channelUserManager, messageService, groupMessageService, groupService, redisStateProperties);
+        DispatchPushService service = new DispatchPushService(channelUserManager, groupMessageService, groupService, redisStateProperties);
         DispatchMessagePayload payload = new DispatchMessagePayload();
         payload.setEventType(DispatchMessagePayload.EVENT_TYPE_RECALL);
         payload.setOriginServerId("node-a");

@@ -4,13 +4,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imchatserver.dao.GroupMessageDO;
-import com.ming.imchatserver.dao.MessageDO;
 import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.message.RecallProtocolSupport;
 import com.ming.imchatserver.netty.ChannelUserManager;
 import com.ming.imchatserver.service.GroupMessageService;
 import com.ming.imchatserver.service.GroupService;
-import com.ming.imchatserver.service.MessageService;
 import io.netty.channel.Channel;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import org.slf4j.Logger;
@@ -42,7 +40,6 @@ public class DispatchPushService {
     private static final int GROUP_STATUS_RETRACTED = 2;
 
     private final ChannelUserManager channelUserManager;
-    private final MessageService messageService;
     private final GroupMessageService groupMessageService;
     private final GroupService groupService;
     private final RedisStateProperties redisStateProperties;
@@ -50,12 +47,10 @@ public class DispatchPushService {
 
     @Autowired
     public DispatchPushService(ChannelUserManager channelUserManager,
-                               MessageService messageService,
                                GroupMessageService groupMessageService,
                                GroupService groupService,
                                RedisStateProperties redisStateProperties) {
         this.channelUserManager = channelUserManager;
-        this.messageService = messageService;
         this.groupMessageService = groupMessageService;
         this.groupService = groupService;
         this.redisStateProperties = redisStateProperties;
@@ -64,8 +59,8 @@ public class DispatchPushService {
     /**
      * 供精简场景或测试使用的构造器。
      */
-    public DispatchPushService(ChannelUserManager channelUserManager, MessageService messageService) {
-        this(channelUserManager, messageService, null, null, null);
+    public DispatchPushService(ChannelUserManager channelUserManager) {
+        this(channelUserManager, null, null, null);
     }
 
     /**
@@ -93,15 +88,6 @@ public class DispatchPushService {
         if (targets.isEmpty()) {
             logger.info("mq dispatch target offline, serverMsgId={} toUserId={}",
                     payload.getServerMsgId(), payload.getToUserId());
-            return;
-        }
-
-        MessageDO current = messageService == null ? null : messageService.findByServerMsgId(payload.getServerMsgId());
-        if (current != null && isRetracted(current)) {
-            fanoutToUser(payload.getToUserId(),
-                    RecallProtocolSupport.buildSingleRecallNode(mapper, "MSG_RECALL_NOTIFY", current));
-            logger.info("mq dispatch converted to recall notify serverMsgId={} toUserId={} channels={}",
-                    payload.getServerMsgId(), payload.getToUserId(), targets.size());
             return;
         }
 
@@ -213,13 +199,6 @@ public class DispatchPushService {
         fanoutGroup(payload.getGroupId(),
                 mapper.writeValueAsString(RecallProtocolSupport.buildGroupRecallNode(mapper, "GROUP_MSG_RECALL_NOTIFY", payload)),
                 false);
-    }
-
-    /**
-     * 判断单聊消息是否已经处于撤回状态。
-     */
-    private boolean isRetracted(MessageDO message) {
-        return message != null && (STATUS_RETRACTED.equalsIgnoreCase(message.getStatus()) || message.getRetractedAt() != null);
     }
 
     /**

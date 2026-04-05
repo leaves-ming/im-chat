@@ -37,7 +37,6 @@ import java.util.concurrent.Executor;
     private final NettyProperties properties;
     private final AuthService authService;
     private final ChannelUserManager channelUserManager;
-    private final com.ming.imchatserver.service.MessageService messageService;
     private final ContactService contactService;
     private final GroupService groupService;
     private final GroupMessageService groupMessageService;
@@ -65,7 +64,6 @@ import java.util.concurrent.Executor;
     public NettyServerInitializer(NettyProperties properties,
                                   AuthService authService,
                                   ChannelUserManager channelUserManager,
-                                  com.ming.imchatserver.service.MessageService messageService,
                                   ContactService contactService,
                                   GroupService groupService,
                                   GroupMessageService groupMessageService,
@@ -89,7 +87,6 @@ import java.util.concurrent.Executor;
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
-        this.messageService = messageService;
         this.contactService = contactService;
         this.groupService = groupService;
         this.groupMessageService = groupMessageService;
@@ -138,7 +135,7 @@ import java.util.concurrent.Executor;
         ch.pipeline().addLast(new WebSocketServerProtocolHandler(properties.getWebsocketPath(), null, true, properties.getMaxContentLength()));
         // 业务帧鉴权（要求 channel 已绑定 userId）
         ch.pipeline().addLast(new WsBusinessAuthHandler(channelUserManager));
-        ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService,
+        ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, null, contactService, groupService, groupMessageService,
                 properties, deliveryMapper, metricsService, groupPushExecutor, groupPushCoordinator,
                 idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
                 messageFacade, authFacadeFacade,

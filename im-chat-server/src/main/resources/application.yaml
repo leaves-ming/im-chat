@@ -15,6 +15,11 @@ spring:
     openfeign:
       sentinel:
         enabled: true
+      client:
+        config:
+          im-social-service:
+            connectTimeout: ${IM_SOCIAL_CONNECT_TIMEOUT_MS:300}
+            readTimeout: ${IM_SOCIAL_READ_TIMEOUT_MS:800}
     nacos:
       discovery:
         enabled: ${IM_NACOS_ENABLED:false}
@@ -209,3 +214,9 @@ im:
     message:
       remote-enabled: ${IM_ROUTE_MESSAGE_REMOTE_ENABLED:false}
       fallback-to-local-on-error: ${IM_ROUTE_MESSAGE_FALLBACK_TO_LOCAL_ON_ERROR:true}
+    social:
+      remote-enabled: ${IM_ROUTE_SOCIAL_REMOTE_ENABLED:true}
+      single-chat-permission-cache-ttl-seconds: ${IM_ROUTE_SOCIAL_SINGLE_CHAT_PERMISSION_CACHE_TTL_SECONDS:15}
+      contact-active-cache-ttl-seconds: ${IM_ROUTE_SOCIAL_CONTACT_ACTIVE_CACHE_TTL_SECONDS:15}
+      group-member-ids-cache-ttl-seconds: ${IM_ROUTE_SOCIAL_GROUP_MEMBER_IDS_CACHE_TTL_SECONDS:5}
+      group-recall-permission-cache-ttl-seconds: ${IM_ROUTE_SOCIAL_GROUP_RECALL_PERMISSION_CACHE_TTL_SECONDS:5}

@@ -7,7 +7,6 @@ import org.mybatis.spring.SqlSessionTemplate;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 
 import javax.sql.DataSource;
 import java.util.Properties;
@@ -25,9 +24,6 @@ public class MybatisConfig {
         factoryBean.setDataSource(dataSource);
         factoryBean.setTypeAliasesPackage("com.ming.imsocialservice.dao");
         factoryBean.setPlugins(pageInterceptor());
-        factoryBean.setMapperLocations(
-                new PathMatchingResourcePatternResolver().getResources("classpath*:/mapper/**/*.xml")
-        );
         return factoryBean.getObject();
     }
 

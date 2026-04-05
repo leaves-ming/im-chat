@@ -16,6 +16,7 @@ import com.ming.imchatserver.service.GroupMessageService;
 import com.ming.imchatserver.service.GroupService;
 import com.ming.imchatserver.service.IdempotencyService;
 import com.ming.imchatserver.service.RateLimitService;
+import com.ming.imchatserver.service.SingleChatPermissionCapable;
 import io.netty.channel.Channel;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import org.slf4j.Logger;
@@ -178,6 +179,9 @@ public class SocialFacadeImpl implements SocialFacade {
     public boolean isSingleChatAllowed(Long fromUserId, Long toUserId) {
         if (contactService == null) {
             return true;
+        }
+        if (contactService instanceof SingleChatPermissionCapable permissionCapable) {
+            return permissionCapable.isSingleChatAllowed(fromUserId, toUserId);
         }
         return contactService.isActiveContact(fromUserId, toUserId)
                 && contactService.isActiveContact(toUserId, fromUserId);

@@ -173,9 +173,6 @@ public class GroupMessageServiceImpl implements GroupMessageService {
         if (groupService == null) {
             throw new IllegalStateException("group service unavailable");
         }
-        if (groupService.getActiveMember(exist.getGroupId(), operatorUserId) == null) {
-            throw new MessageRecallException("FORBIDDEN", "operator is not active group member");
-        }
         if (!groupService.canRecallMessage(exist.getGroupId(), operatorUserId, exist.getFromUserId())) {
             throw new MessageRecallException("FORBIDDEN", "insufficient role to recall message");
         }
