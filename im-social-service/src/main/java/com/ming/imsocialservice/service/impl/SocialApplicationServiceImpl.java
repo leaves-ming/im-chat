@@ -11,6 +11,8 @@ import com.ming.imapicontract.social.ContactOperateRequest;
 import com.ming.imapicontract.social.ContactOperateResponse;
 import com.ming.imapicontract.social.GetGroupMemberIdsRequest;
 import com.ming.imapicontract.social.GetGroupMemberIdsResponse;
+import com.ming.imapicontract.social.GroupCreateRequest;
+import com.ming.imapicontract.social.GroupCreateResponse;
 import com.ming.imapicontract.social.GroupJoinRequest;
 import com.ming.imapicontract.social.GroupJoinResponse;
 import com.ming.imapicontract.social.GroupMemberDTO;
@@ -78,6 +80,13 @@ public class SocialApplicationServiceImpl implements SocialApplicationService {
     @Override
     public CheckContactActiveResponse checkContactActive(CheckContactActiveRequest request) {
         return new CheckContactActiveResponse(contactService.isActiveContact(request.ownerUserId(), request.peerUserId()));
+    }
+
+    @Override
+    public GroupCreateResponse createGroup(GroupCreateRequest request) {
+        GroupService.CreateGroupResult result = groupService.createGroup(
+                request.ownerUserId(), request.name(), request.memberLimit());
+        return new GroupCreateResponse(result.getGroupId(), result.getGroupNo());
     }
 
     @Override

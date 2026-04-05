@@ -81,6 +81,11 @@ mybatis:
     map-underscore-to-camel-case: true
     cache-enabled: false
 
+rocketmq:
+  name-server: ${IM_ROCKETMQ_NAME_SERVER:127.0.0.1:9876}
+  producer:
+    group: ${IM_ROCKETMQ_PRODUCER_GROUP:im-message-producer-group}
+
 logging:
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} traceId=%X{traceId:-na} %msg%n"
@@ -99,3 +104,11 @@ im:
     protocol: http
   message-service:
     offline-pull-max-limit: ${IM_MESSAGE_SERVICE_OFFLINE_PULL_MAX_LIMIT:200}
+  reliability:
+    relay-batch-size: 100
+    relay-fixed-delay-ms: 1000
+    processing-timeout-ms: 30000
+    max-retry-count: 8
+    dispatch-topic: im.msg.dispatch
+  redis:
+    server-id: ${HOSTNAME:im-message-service}

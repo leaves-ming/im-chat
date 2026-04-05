@@ -1,7 +1,6 @@
 package com.ming.imchatserver.sensitive;
 
 import com.ming.imchatserver.config.SensitiveWordProperties;
-import com.ming.imchatserver.mapper.OutboxMapper;
 import com.ming.imchatserver.metrics.MetricsService;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.DefaultResourceLoader;
@@ -117,6 +116,6 @@ class SensitiveWordServiceTest {
     }
 
     private MetricsService metricsService() {
-        return new MetricsService(mock(OutboxMapper.class));
+        return new MetricsService();
     }
 }

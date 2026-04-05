@@ -5,6 +5,8 @@ import com.ming.imapicontract.social.CheckGroupRecallPermissionRequest;
 import com.ming.imapicontract.social.CheckGroupRecallPermissionResponse;
 import com.ming.imapicontract.social.GetGroupMemberIdsRequest;
 import com.ming.imapicontract.social.GetGroupMemberIdsResponse;
+import com.ming.imapicontract.social.GroupCreateRequest;
+import com.ming.imapicontract.social.GroupCreateResponse;
 import com.ming.imapicontract.social.GroupJoinRequest;
 import com.ming.imapicontract.social.GroupJoinResponse;
 import com.ming.imapicontract.social.GroupMemberDTO;
@@ -42,6 +44,16 @@ public class RemoteGroupService {
         this.socialServiceClient = socialServiceClient;
         this.socialCacheSupport = socialCacheSupport;
         this.socialRouteProperties = socialRouteProperties;
+    }
+
+    public GroupService.CreateGroupResult createGroup(Long ownerUserId, String name, Integer memberLimit) {
+        GroupCreateResponse response = unwrap(socialServiceClient.createGroup(
+                new GroupCreateRequest(ownerUserId, name, memberLimit)));
+        if (response == null) {
+            throw new SocialRpcException("REMOTE_UNAVAILABLE", "social service response is null");
+        }
+        socialCacheSupport.invalidateGroup(response.groupId());
+        return new GroupService.CreateGroupResult(response.groupId(), response.groupNo());
     }
 
     public GroupService.JoinGroupResult joinGroup(Long groupId, Long userId) {

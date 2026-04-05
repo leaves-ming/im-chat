@@ -12,10 +12,9 @@ import com.ming.imchatserver.file.FileStorageService;
 import com.ming.imchatserver.file.LocalFileStorageServiceImpl;
 import com.ming.imchatserver.file.StoredFileResource;
 import com.ming.imchatserver.mapper.FileRecordMapper;
-import com.ming.imchatserver.mapper.GroupMessageMapper;
-import com.ming.imchatserver.mapper.MessageMapper;
 import com.ming.imchatserver.mapper.UploadTokenMapper;
 import com.ming.imchatserver.message.MessageContentCodec;
+import com.ming.imchatserver.remote.message.MessageServiceClient;
 import com.ming.imchatserver.service.FileService;
 import com.ming.imchatserver.service.FileTokenBizException;
 import com.ming.imchatserver.service.IdempotencyService;
@@ -50,8 +49,7 @@ public class FileServiceImpl implements FileService {
 
     private final FileRecordMapper fileRecordMapper;
     private final UploadTokenMapper uploadTokenMapper;
-    private final MessageMapper messageMapper;
-    private final GroupMessageMapper groupMessageMapper;
+    private final MessageServiceClient messageServiceClient;
     private final FileStorageService fileStorageService;
     private final FileStorageProperties fileStorageProperties;
     private final IdempotencyService idempotencyService;
@@ -60,15 +58,13 @@ public class FileServiceImpl implements FileService {
 
     public FileServiceImpl(FileRecordMapper fileRecordMapper,
                            UploadTokenMapper uploadTokenMapper,
-                           MessageMapper messageMapper,
-                           GroupMessageMapper groupMessageMapper,
+                           MessageServiceClient messageServiceClient,
                            FileStorageService fileStorageService,
                            FileStorageProperties fileStorageProperties,
                            IdempotencyService idempotencyService) {
         this.fileRecordMapper = fileRecordMapper;
         this.uploadTokenMapper = uploadTokenMapper;
-        this.messageMapper = messageMapper;
-        this.groupMessageMapper = groupMessageMapper;
+        this.messageServiceClient = messageServiceClient;
         this.fileStorageService = fileStorageService;
         this.fileStorageProperties = fileStorageProperties;
         this.idempotencyService = idempotencyService;
@@ -216,12 +212,9 @@ public class FileServiceImpl implements FileService {
                 && Objects.equals(requesterUserId, record.getOwnerUserId())) {
             return true;
         }
-        Integer singleChatAccess = messageMapper.existsFileParticipant(record.getFileId(), requesterUserId);
-        if (singleChatAccess != null && singleChatAccess > 0) {
-            return true;
-        }
-        Integer groupAccess = groupMessageMapper.existsFileForActiveMember(record.getFileId(), requesterUserId);
-        return groupAccess != null && groupAccess > 0;
+        var response = messageServiceClient.checkFileAccess(
+                new com.ming.imapicontract.message.CheckFileAccessRequest(record.getFileId(), requesterUserId));
+        return response != null && response.isSuccess() && response.getData() != null && response.getData().allowed();
     }
 
     private String normalizeContentType(String contentType) {

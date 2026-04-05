@@ -34,11 +34,14 @@ public class SingleMessageDomainService {
 
     private final MessageMapper messageMapper;
     private final SingleCursorMapper singleCursorMapper;
+    private final DispatchOutboxDomainService dispatchOutboxDomainService;
 
     public SingleMessageDomainService(MessageMapper messageMapper,
-                                      SingleCursorMapper singleCursorMapper) {
+                                      SingleCursorMapper singleCursorMapper,
+                                      DispatchOutboxDomainService dispatchOutboxDomainService) {
         this.messageMapper = messageMapper;
         this.singleCursorMapper = singleCursorMapper;
+        this.dispatchOutboxDomainService = dispatchOutboxDomainService;
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -57,6 +60,7 @@ public class SingleMessageDomainService {
         message.setStatus(STATUS_SENT);
         try {
             messageMapper.insert(message);
+            dispatchOutboxDomainService.appendSingleMessage(decodeMessage(message));
             return new PersistResult(message.getServerMsgId(), true);
         } catch (DuplicateKeyException ex) {
             if (message.getClientMsgId() == null) {
@@ -79,6 +83,9 @@ public class SingleMessageDomainService {
         int updated = updateStatusByServerMsgId(serverMsgId, targetStatus);
         Date ackAt = updated > 0 ? new Date() : null;
         MessageDO latest = updated > 0 ? requiredMessage(serverMsgId) : existing;
+        if (updated > 0) {
+            dispatchOutboxDomainService.appendStatusNotify(latest, targetStatus, latest.getFromUserId());
+        }
         return new AckResult(toMessageDTO(latest), targetStatus, updated, ackAt);
     }
 
@@ -120,7 +127,14 @@ public class SingleMessageDomainService {
         if (updated <= 0) {
             throw new IllegalStateException("recall message failed serverMsgId=" + serverMsgId);
         }
-        return toMessageDTO(requiredMessage(serverMsgId));
+        MessageDTO recalled = toMessageDTO(requiredMessage(serverMsgId));
+        dispatchOutboxDomainService.appendSingleRecall(requiredMessage(serverMsgId));
+        return recalled;
+    }
+
+    public boolean hasFileAccess(String fileId, Long userId) {
+        Integer access = messageMapper.existsFileParticipant(fileId, userId);
+        return access != null && access > 0;
     }
 
     public SyncCursorDTO getSyncCursor(Long userId, String deviceId) {

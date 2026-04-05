@@ -11,6 +11,8 @@ import com.ming.imapicontract.social.ContactOperateRequest;
 import com.ming.imapicontract.social.ContactOperateResponse;
 import com.ming.imapicontract.social.GetGroupMemberIdsRequest;
 import com.ming.imapicontract.social.GetGroupMemberIdsResponse;
+import com.ming.imapicontract.social.GroupCreateRequest;
+import com.ming.imapicontract.social.GroupCreateResponse;
 import com.ming.imapicontract.social.GroupJoinRequest;
 import com.ming.imapicontract.social.GroupJoinResponse;
 import com.ming.imapicontract.social.GroupMemberListRequest;
@@ -49,6 +51,11 @@ public class SocialServiceClientFallbackFactory implements FallbackFactory<Socia
 
             @Override
             public ApiResponse<CheckContactActiveResponse> checkContactActive(CheckContactActiveRequest request) {
+                return ApiResponse.failure("REMOTE_UNAVAILABLE", message);
+            }
+
+            @Override
+            public ApiResponse<GroupCreateResponse> createGroup(GroupCreateRequest request) {
                 return ApiResponse.failure("REMOTE_UNAVAILABLE", message);
             }
 

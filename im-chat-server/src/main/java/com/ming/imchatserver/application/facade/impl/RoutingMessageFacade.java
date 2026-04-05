@@ -31,7 +31,7 @@ public class RoutingMessageFacade implements MessageFacade {
 
     @Override
     public boolean enqueueStatusNotify(MessageDO message, String status) {
-        return false;
+        return remoteMessageFacade.enqueueStatusNotify(message, status);
     }
 
     @Override

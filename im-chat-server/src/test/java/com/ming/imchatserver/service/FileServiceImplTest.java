@@ -1,14 +1,15 @@
 package com.ming.imchatserver.service;
 
+import com.ming.im.apicontract.common.ApiResponse;
+import com.ming.imapicontract.message.CheckFileAccessResponse;
 import com.ming.imchatserver.config.FileStorageProperties;
 import com.ming.imchatserver.dao.FileRecordDO;
 import com.ming.imchatserver.file.FileAccessDeniedException;
 import com.ming.imchatserver.file.StoredFileResource;
 import com.ming.imchatserver.file.FileStorageService;
 import com.ming.imchatserver.mapper.FileRecordMapper;
-import com.ming.imchatserver.mapper.GroupMessageMapper;
-import com.ming.imchatserver.mapper.MessageMapper;
 import com.ming.imchatserver.mapper.UploadTokenMapper;
+import com.ming.imchatserver.remote.message.MessageServiceClient;
 import com.ming.imchatserver.redis.RedisKeyFactory;
 import com.ming.imchatserver.service.impl.IdempotencyServiceImpl;
 import com.ming.imchatserver.service.impl.FileServiceImpl;
@@ -37,8 +38,7 @@ class FileServiceImplTest {
     void createDownloadUrlShouldReturnSignedUrlAfterPermissionCheck() {
         FileRecordMapper fileRecordMapper = mock(FileRecordMapper.class);
         UploadTokenMapper uploadTokenMapper = mock(UploadTokenMapper.class);
-        MessageMapper messageMapper = mock(MessageMapper.class);
-        GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
+        MessageServiceClient messageServiceClient = mock(MessageServiceClient.class);
         FileStorageService fileStorageService = mock(FileStorageService.class);
         StringRedisTemplate stringRedisTemplate = mock(StringRedisTemplate.class);
         IdempotencyService idempotencyService = new IdempotencyServiceImpl(stringRedisTemplate, new RedisKeyFactory());
@@ -48,10 +48,11 @@ class FileServiceImplTest {
 
         FileRecordDO record = record("f_1", 2L);
         when(fileRecordMapper.findByFileId("f_1")).thenReturn(record);
-        when(messageMapper.existsFileParticipant("f_1", 9L)).thenReturn(1);
+        when(messageServiceClient.checkFileAccess(any()))
+                .thenReturn(ApiResponse.success(new CheckFileAccessResponse(true)));
 
         FileServiceImpl service = new FileServiceImpl(
-                fileRecordMapper, uploadTokenMapper, messageMapper, groupMessageMapper, fileStorageService, properties, idempotencyService);
+                fileRecordMapper, uploadTokenMapper, messageServiceClient, fileStorageService, properties, idempotencyService);
 
         FileService.DownloadUrlResult result = service.createDownloadUrl(9L, "f_1");
 
@@ -64,8 +65,7 @@ class FileServiceImplTest {
     void loadBySignedDownloadUrlShouldRejectExpiredSignature() {
         FileRecordMapper fileRecordMapper = mock(FileRecordMapper.class);
         UploadTokenMapper uploadTokenMapper = mock(UploadTokenMapper.class);
-        MessageMapper messageMapper = mock(MessageMapper.class);
-        GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
+        MessageServiceClient messageServiceClient = mock(MessageServiceClient.class);
         FileStorageService fileStorageService = mock(FileStorageService.class);
         StringRedisTemplate stringRedisTemplate = mock(StringRedisTemplate.class);
         IdempotencyService idempotencyService = new IdempotencyServiceImpl(stringRedisTemplate, new RedisKeyFactory());
@@ -73,10 +73,11 @@ class FileServiceImplTest {
         properties.setDownloadSignSecret("secret-1");
         properties.setDownloadSignExpireSeconds(-1L);
         when(fileRecordMapper.findByFileId("f_1")).thenReturn(record("f_1", 2L));
-        when(messageMapper.existsFileParticipant("f_1", 9L)).thenReturn(1);
+        when(messageServiceClient.checkFileAccess(any()))
+                .thenReturn(ApiResponse.success(new CheckFileAccessResponse(true)));
 
         FileServiceImpl service = new FileServiceImpl(
-                fileRecordMapper, uploadTokenMapper, messageMapper, groupMessageMapper, fileStorageService, properties, idempotencyService);
+                fileRecordMapper, uploadTokenMapper, messageServiceClient, fileStorageService, properties, idempotencyService);
 
         FileService.DownloadUrlResult result = service.createDownloadUrl(9L, "f_1");
 
@@ -88,8 +89,7 @@ class FileServiceImplTest {
     void loadBySignedDownloadUrlShouldRejectSecondConsumeWhenOneTimeEnabled() throws Exception {
         FileRecordMapper fileRecordMapper = mock(FileRecordMapper.class);
         UploadTokenMapper uploadTokenMapper = mock(UploadTokenMapper.class);
-        MessageMapper messageMapper = mock(MessageMapper.class);
-        GroupMessageMapper groupMessageMapper = mock(GroupMessageMapper.class);
+        MessageServiceClient messageServiceClient = mock(MessageServiceClient.class);
         FileStorageService fileStorageService = mock(FileStorageService.class);
         StringRedisTemplate stringRedisTemplate = mock(StringRedisTemplate.class);
         @SuppressWarnings("unchecked")
@@ -105,7 +105,8 @@ class FileServiceImplTest {
 
         FileRecordDO record = record("f_1", 2L);
         when(fileRecordMapper.findByFileId("f_1")).thenReturn(record);
-        when(messageMapper.existsFileParticipant("f_1", 9L)).thenReturn(1);
+        when(messageServiceClient.checkFileAccess(any()))
+                .thenReturn(ApiResponse.success(new CheckFileAccessResponse(true)));
 
         Path file = tempDir.resolve("note.txt");
         Files.writeString(file, "hello");
@@ -113,7 +114,7 @@ class FileServiceImplTest {
         when(fileStorageService.load("storage-key", "note.txt", "text/plain")).thenReturn(storedFileResource);
 
         FileServiceImpl service = new FileServiceImpl(
-                fileRecordMapper, uploadTokenMapper, messageMapper, groupMessageMapper, fileStorageService, properties, idempotencyService);
+                fileRecordMapper, uploadTokenMapper, messageServiceClient, fileStorageService, properties, idempotencyService);
 
         FileService.DownloadUrlResult result = service.createDownloadUrl(9L, "f_1");
         long exp = queryLong(result.downloadUrl(), "exp");

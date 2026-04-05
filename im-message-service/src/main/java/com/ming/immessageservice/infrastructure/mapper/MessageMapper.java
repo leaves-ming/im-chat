@@ -35,4 +35,6 @@ public interface MessageMapper {
                                               @Param("cursorId") Long cursorId);
 
     List<MessageDO> findRecentByToUserId(@Param("toUserId") Long toUserId);
+
+    Integer existsFileParticipant(@Param("fileId") String fileId, @Param("userId") Long userId);
 }

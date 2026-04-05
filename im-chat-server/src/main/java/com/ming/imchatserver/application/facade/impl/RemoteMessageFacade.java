@@ -54,7 +54,7 @@ public class RemoteMessageFacade implements MessageFacade {
 
     @Override
     public boolean enqueueStatusNotify(MessageDO message, String status) {
-        return false;
+        return true;
     }
 
     @Override

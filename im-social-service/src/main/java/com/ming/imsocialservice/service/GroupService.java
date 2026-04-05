@@ -9,6 +9,8 @@ import java.util.List;
  */
 public interface GroupService {
 
+    CreateGroupResult createGroup(Long ownerUserId, String name, Integer memberLimit);
+
     JoinGroupResult joinGroup(Long groupId, Long userId);
 
     QuitGroupResult quitGroup(Long groupId, Long userId);
@@ -18,6 +20,24 @@ public interface GroupService {
     boolean canRecallMessage(Long groupId, Long operatorUserId, Long targetUserId);
 
     List<Long> listActiveMemberUserIds(Long groupId);
+
+    class CreateGroupResult {
+        private final Long groupId;
+        private final String groupNo;
+
+        public CreateGroupResult(Long groupId, String groupNo) {
+            this.groupId = groupId;
+            this.groupNo = groupNo;
+        }
+
+        public Long getGroupId() {
+            return groupId;
+        }
+
+        public String getGroupNo() {
+            return groupNo;
+        }
+    }
 
     class MemberPageResult {
         private final List<SocialGroupMemberDO> items;

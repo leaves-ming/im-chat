@@ -39,6 +39,7 @@ import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.Executor;
 
@@ -164,13 +165,11 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
         this.businessExecutor = businessExecutor == null ? Runnable::run : businessExecutor;
         ObjectMapper mapper = new ObjectMapper();
         this.protocolSupport = new WsProtocolSupport(mapper);
-        this.messageFacade = injectedMessageFacade != null
-                ? injectedMessageFacade
-                : localMessageFacadeAdapter(messageService);
+        this.messageFacade = Objects.requireNonNull(injectedMessageFacade, "messageFacade unavailable");
         SocialFacade socialFacade = new SocialFacadeImpl(contactService, groupService, groupMessageService,
                 channelUserManager, groupPushExecutor, groupPushCoordinator, metricsService,
                 idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties, nettyProperties);
-        this.authFacade = injectedAuthFacade != null ? injectedAuthFacade : localAuthFacadeAdapter(messageService);
+        this.authFacade = Objects.requireNonNull(injectedAuthFacade, "authFacade unavailable");
         WsRouteProperties effectiveRouteProperties = routeProperties == null ? new WsRouteProperties() : routeProperties;
         this.commandRouter = new WsCommandRouter(
                 effectiveRouteProperties,
@@ -187,74 +186,6 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
                                  DeliveryMapper deliveryMapper) {
         this(channelUserManager, messageService, null, null, null, nettyProperties, deliveryMapper, null,
                 null, null, null, null, null, null, null, null, null, null);
-    }
-
-    private MessageFacade localMessageFacadeAdapter(MessageService messageService) {
-        if (messageService == null) {
-            throw new IllegalStateException("messageFacade unavailable");
-        }
-        return new MessageFacade() {
-            @Override
-            public ChatPersistResult sendChat(Long fromUserId, Long targetUserId, String clientMsgId, String msgType, String content) {
-                MessageDO msg = new MessageDO();
-                msg.setClientMsgId(clientMsgId);
-                msg.setFromUserId(fromUserId);
-                msg.setToUserId(targetUserId);
-                msg.setMsgType(msgType);
-                msg.setContent(content);
-                msg.setStatus("SENT");
-                MessageService.PersistResult result = messageService.persistMessage(msg);
-                return new ChatPersistResult(clientMsgId, result.getServerMsgId(), result.isCreatedNew());
-            }
-
-            @Override
-            public AckReportResult reportAck(Long reporterUserId, String serverMsgId, String targetStatus) {
-                MessageDO message = messageService.findByServerMsgId(serverMsgId);
-                if (message == null) {
-                    throw new IllegalArgumentException("serverMsgId not found");
-                }
-                int updated = messageService.updateStatusByServerMsgId(serverMsgId, targetStatus);
-                return new AckReportResult(message, targetStatus, updated, updated > 0 ? new java.util.Date() : null);
-            }
-
-            @Override
-            public boolean enqueueStatusNotify(MessageDO message, String status) {
-                return messageService.enqueueStatusNotify(message, status);
-            }
-
-            @Override
-            public MessageService.CursorPageResult pullOffline(Long userId, String deviceId, MessageService.SyncCursor syncCursor, int limit) {
-                return syncCursor == null
-                        ? messageService.pullOfflineFromCheckpoint(userId, deviceId, limit)
-                        : messageService.pullOffline(userId, deviceId, syncCursor, limit);
-            }
-
-            @Override
-            public MessageService.CursorPageResult loadInitialSync(Long userId, String deviceId, int limit) {
-                return messageService.pullOfflineFromCheckpoint(userId, deviceId, limit);
-            }
-
-            @Override
-            public void advanceSyncCursor(Long userId, String deviceId, MessageService.CursorPageResult pageResult) {
-                if (pageResult == null || pageResult.getNextCursorCreatedAt() == null || pageResult.getNextCursorId() == null) {
-                    return;
-                }
-                messageService.advanceSyncCursor(userId, deviceId,
-                        new MessageService.SyncCursor(pageResult.getNextCursorCreatedAt(), pageResult.getNextCursorId()));
-            }
-
-            @Override
-            public MessageDO recallMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds) {
-                return messageService.recallMessage(operatorUserId, serverMsgId, recallWindowSeconds);
-            }
-        };
-    }
-
-    private AuthFacade localAuthFacadeAdapter(MessageService messageService) {
-        if (messageService == null) {
-            throw new IllegalStateException("authFacade unavailable");
-        }
-        return (userId, deviceId, limit) -> messageService.pullOfflineFromCheckpoint(userId, deviceId, limit);
     }
 
     @Override

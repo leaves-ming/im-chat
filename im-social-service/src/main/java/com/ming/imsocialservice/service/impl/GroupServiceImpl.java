@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 群关系服务默认实现。
@@ -20,6 +21,7 @@ import java.util.List;
 @Service
 public class GroupServiceImpl implements GroupService {
 
+    private static final int DEFAULT_MEMBER_LIMIT = 1000;
     private static final int MAX_LIST_LIMIT = 200;
 
     private final SocialGroupMapper socialGroupMapper;
@@ -28,6 +30,26 @@ public class GroupServiceImpl implements GroupService {
     public GroupServiceImpl(SocialGroupMapper socialGroupMapper, SocialGroupMemberMapper socialGroupMemberMapper) {
         this.socialGroupMapper = socialGroupMapper;
         this.socialGroupMemberMapper = socialGroupMemberMapper;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public CreateGroupResult createGroup(Long ownerUserId, String name, Integer memberLimit) {
+        if (ownerUserId == null || ownerUserId <= 0 || name == null || name.trim().isEmpty()) {
+            throw new GroupBizException(GroupErrorCode.INVALID_PARAM, "invalid create group params");
+        }
+        int finalMemberLimit = memberLimit == null || memberLimit <= 0 ? DEFAULT_MEMBER_LIMIT : memberLimit;
+
+        SocialGroupDO group = new SocialGroupDO();
+        group.setGroupNo(generateGroupNo());
+        group.setOwnerUserId(ownerUserId);
+        group.setName(name.trim());
+        group.setStatus(GroupDomainConstants.GROUP_STATUS_ACTIVE);
+        group.setMemberLimit(finalMemberLimit);
+
+        socialGroupMapper.insertGroup(group);
+        socialGroupMemberMapper.insertOwner(group.getId(), ownerUserId);
+        return new CreateGroupResult(group.getId(), group.getGroupNo());
     }
 
     @Override
@@ -151,5 +173,9 @@ public class GroupServiceImpl implements GroupService {
             case GroupDomainConstants.MEMBER_ROLE_MEMBER -> 1;
             default -> 0;
         };
+    }
+
+    private String generateGroupNo() {
+        return "g" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
     }
 }

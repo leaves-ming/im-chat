@@ -10,6 +10,8 @@ import com.ming.imapicontract.social.ContactOperateRequest;
 import com.ming.imapicontract.social.ContactOperateResponse;
 import com.ming.imapicontract.social.GetGroupMemberIdsRequest;
 import com.ming.imapicontract.social.GetGroupMemberIdsResponse;
+import com.ming.imapicontract.social.GroupCreateRequest;
+import com.ming.imapicontract.social.GroupCreateResponse;
 import com.ming.imapicontract.social.GroupJoinRequest;
 import com.ming.imapicontract.social.GroupJoinResponse;
 import com.ming.imapicontract.social.GroupMemberListRequest;
@@ -31,6 +33,8 @@ public interface SocialApplicationService {
     ContactListResponse listContacts(ContactListRequest request);
 
     CheckContactActiveResponse checkContactActive(CheckContactActiveRequest request);
+
+    GroupCreateResponse createGroup(GroupCreateRequest request);
 
     GroupJoinResponse joinGroup(GroupJoinRequest request);
 

@@ -11,6 +11,8 @@ import com.ming.imapicontract.social.ContactOperateRequest;
 import com.ming.imapicontract.social.ContactOperateResponse;
 import com.ming.imapicontract.social.GetGroupMemberIdsRequest;
 import com.ming.imapicontract.social.GetGroupMemberIdsResponse;
+import com.ming.imapicontract.social.GroupCreateRequest;
+import com.ming.imapicontract.social.GroupCreateResponse;
 import com.ming.imapicontract.social.GroupJoinRequest;
 import com.ming.imapicontract.social.GroupJoinResponse;
 import com.ming.imapicontract.social.GroupMemberListRequest;
@@ -57,6 +59,11 @@ public class SocialCommandController {
     @PostMapping(SocialApiPaths.CONTACT_ACTIVE_CHECK)
     public ApiResponse<CheckContactActiveResponse> checkContactActive(@RequestBody CheckContactActiveRequest request) {
         return ApiResponse.success(socialApplicationService.checkContactActive(request));
+    }
+
+    @PostMapping(SocialApiPaths.GROUP_CREATE)
+    public ApiResponse<GroupCreateResponse> createGroup(@RequestBody GroupCreateRequest request) {
+        return ApiResponse.success(socialApplicationService.createGroup(request));
     }
 
     @PostMapping(SocialApiPaths.GROUP_JOIN)

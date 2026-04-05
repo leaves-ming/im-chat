@@ -1,6 +1,4 @@
 package com.ming.imchatserver.metrics;
-
-import com.ming.imchatserver.mapper.OutboxMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -22,7 +20,6 @@ public class MetricsService {
     private static final String ACK_TYPE_DELIVERED = "DELIVERED";
     private static final String ACK_TYPE_ACKED = "ACKED";
 
-    private final OutboxMapper outboxMapper;
     private final AtomicLong outboxBacklog = new AtomicLong(0L);
     private final AtomicLong outboxProcessingBacklog = new AtomicLong(0L);
     private final AtomicLong relaySendTotal = new AtomicLong(0L);
@@ -36,8 +33,7 @@ public class MetricsService {
     private final SlidingWindowLatency deliveredLatencyWindow = new SlidingWindowLatency(4096);
     private final SlidingWindowLatency ackedLatencyWindow = new SlidingWindowLatency(4096);
 
-    public MetricsService(OutboxMapper outboxMapper) {
-        this.outboxMapper = outboxMapper;
+    public MetricsService() {
     }
 
     public void incrementRelaySend() {
@@ -131,12 +127,8 @@ public class MetricsService {
      */
     @Scheduled(fixedDelayString = "${im.metrics.sample-fixed-delay-ms:10000}")
     public void sampleOutboxBacklog() {
-        try {
-            outboxBacklog.set(outboxMapper.countBacklog());
-            outboxProcessingBacklog.set(outboxMapper.countProcessingBacklog());
-        } catch (Exception ex) {
-            logger.warn("sample outbox backlog failed", ex);
-        }
+        outboxBacklog.set(0L);
+        outboxProcessingBacklog.set(0L);
     }
 
     /**

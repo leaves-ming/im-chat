@@ -11,6 +11,8 @@ import com.ming.imapicontract.social.ContactOperateRequest;
 import com.ming.imapicontract.social.ContactOperateResponse;
 import com.ming.imapicontract.social.GetGroupMemberIdsRequest;
 import com.ming.imapicontract.social.GetGroupMemberIdsResponse;
+import com.ming.imapicontract.social.GroupCreateRequest;
+import com.ming.imapicontract.social.GroupCreateResponse;
 import com.ming.imapicontract.social.GroupJoinRequest;
 import com.ming.imapicontract.social.GroupJoinResponse;
 import com.ming.imapicontract.social.GroupMemberListRequest;
@@ -46,6 +48,9 @@ public interface SocialServiceClient {
 
     @PostMapping(SocialApiPaths.CONTACT_ACTIVE_CHECK)
     ApiResponse<CheckContactActiveResponse> checkContactActive(@RequestBody CheckContactActiveRequest request);
+
+    @PostMapping(SocialApiPaths.GROUP_CREATE)
+    ApiResponse<GroupCreateResponse> createGroup(@RequestBody GroupCreateRequest request);
 
     @PostMapping(SocialApiPaths.GROUP_JOIN)
     ApiResponse<GroupJoinResponse> joinGroup(@RequestBody GroupJoinRequest request);

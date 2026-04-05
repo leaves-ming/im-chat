@@ -2,7 +2,10 @@ package com.ming.imchatserver.netty;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ming.imchatserver.application.facade.AuthFacade;
+import com.ming.imchatserver.application.facade.MessageFacade;
 import com.ming.imchatserver.config.NettyProperties;
+import com.ming.imchatserver.config.RateLimitProperties;
 import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imchatserver.dao.ContactDO;
 import com.ming.imchatserver.dao.GroupMessageDO;
@@ -35,6 +38,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -87,6 +91,126 @@ class WebSocketFrameHandlerIntegrationTest {
         nettyProperties.setOfflinePullMaxLimit(200);
     }
 
+    private WebSocketFrameHandler newHandler(MetricsService metricsService) {
+        return newHandler(metricsService, null, null, null, null, null, null, null);
+    }
+
+    private WebSocketFrameHandler newHandler(MetricsService metricsService, Executor groupPushExecutor) {
+        return newHandler(metricsService, groupPushExecutor, null, null, null, null, null, null);
+    }
+
+    private WebSocketFrameHandler newHandler(MetricsService metricsService,
+                                             Executor groupPushExecutor,
+                                             GroupPushCoordinator groupPushCoordinator) {
+        return newHandler(metricsService, groupPushExecutor, groupPushCoordinator, null, null, null, null, null);
+    }
+
+    private WebSocketFrameHandler newHandler(MetricsService metricsService,
+                                             Executor groupPushExecutor,
+                                             GroupPushCoordinator groupPushCoordinator,
+                                             IdempotencyService idempotencyService,
+                                             com.ming.imchatserver.service.RateLimitService rateLimitService,
+                                             RateLimitProperties rateLimitProperties,
+                                             RedisStateProperties redisStateProperties) {
+        return newHandler(metricsService, groupPushExecutor, groupPushCoordinator, idempotencyService,
+                rateLimitService, rateLimitProperties, redisStateProperties, null);
+    }
+
+    private WebSocketFrameHandler newHandler(MetricsService metricsService,
+                                             Executor groupPushExecutor,
+                                             GroupPushCoordinator groupPushCoordinator,
+                                             IdempotencyService idempotencyService,
+                                             com.ming.imchatserver.service.RateLimitService rateLimitService,
+                                             RateLimitProperties rateLimitProperties,
+                                             RedisStateProperties redisStateProperties,
+                                             Executor businessExecutor) {
+        return new WebSocketFrameHandler(
+                channelUserManager,
+                messageService,
+                contactService,
+                groupService,
+                groupMessageService,
+                nettyProperties,
+                deliveryMapper,
+                metricsService,
+                groupPushExecutor,
+                groupPushCoordinator,
+                idempotencyService,
+                rateLimitService,
+                rateLimitProperties,
+                redisStateProperties,
+                bridgeMessageFacade(),
+                bridgeAuthFacade(),
+                businessExecutor,
+                null
+        );
+    }
+
+    private MessageFacade bridgeMessageFacade() {
+        return new MessageFacade() {
+            @Override
+            public ChatPersistResult sendChat(Long fromUserId, Long targetUserId, String clientMsgId, String msgType, String content) {
+                MessageDO msg = new MessageDO();
+                msg.setClientMsgId(clientMsgId);
+                msg.setFromUserId(fromUserId);
+                msg.setToUserId(targetUserId);
+                msg.setMsgType(msgType);
+                msg.setContent(content);
+                msg.setStatus("SENT");
+                MessageService.PersistResult result = messageService.persistMessage(msg);
+                return new ChatPersistResult(clientMsgId, result.getServerMsgId(), result.isCreatedNew());
+            }
+
+            @Override
+            public AckReportResult reportAck(Long reporterUserId, String serverMsgId, String targetStatus) {
+                MessageDO message = messageService.findByServerMsgId(serverMsgId);
+                if (message == null) {
+                    throw new IllegalArgumentException("serverMsgId not found");
+                }
+                if (reporterUserId == null || !reporterUserId.equals(message.getToUserId())) {
+                    throw new SecurityException("not message recipient");
+                }
+                int updated = messageService.updateStatusByServerMsgId(serverMsgId, targetStatus);
+                return new AckReportResult(message, targetStatus, updated, updated > 0 ? new Date() : null);
+            }
+
+            @Override
+            public boolean enqueueStatusNotify(MessageDO message, String status) {
+                return messageService.enqueueStatusNotify(message, status);
+            }
+
+            @Override
+            public MessageService.CursorPageResult pullOffline(Long userId, String deviceId, MessageService.SyncCursor syncCursor, int limit) {
+                return syncCursor == null
+                        ? messageService.pullOfflineFromCheckpoint(userId, deviceId, limit)
+                        : messageService.pullOffline(userId, deviceId, syncCursor, limit);
+            }
+
+            @Override
+            public MessageService.CursorPageResult loadInitialSync(Long userId, String deviceId, int limit) {
+                return messageService.pullOfflineFromCheckpoint(userId, deviceId, limit);
+            }
+
+            @Override
+            public void advanceSyncCursor(Long userId, String deviceId, MessageService.CursorPageResult pageResult) {
+                if (pageResult == null || pageResult.getNextCursorCreatedAt() == null || pageResult.getNextCursorId() == null) {
+                    return;
+                }
+                messageService.advanceSyncCursor(userId, deviceId,
+                        new MessageService.SyncCursor(pageResult.getNextCursorCreatedAt(), pageResult.getNextCursorId()));
+            }
+
+            @Override
+            public MessageDO recallMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds) {
+                return messageService.recallMessage(operatorUserId, serverMsgId, recallWindowSeconds);
+            }
+        };
+    }
+
+    private AuthFacade bridgeAuthFacade() {
+        return (userId, deviceId, limit) -> messageService.pullOfflineFromCheckpoint(userId, deviceId, limit);
+    }
+
     @Test
     /**
      * 方法说明。
@@ -102,7 +226,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(messageService.findByServerMsgId("srv-1")).thenReturn(saved);
         when(messageService.updateStatusByServerMsgId("srv-1", "ACKED")).thenReturn(1, 0);
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(20L);
 
         String req = "{\"type\":\"ACK_REPORT\",\"serverMsgId\":\"srv-1\",\"status\":\"ACKED\"}";
@@ -136,7 +260,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(messageService.findByServerMsgId("srv-d")).thenReturn(saved);
         when(messageService.updateStatusByServerMsgId("srv-d", "DELIVERED")).thenReturn(1);
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(20L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"ACK_REPORT\",\"serverMsgId\":\"srv-d\",\"status\":\"DELIVERED\"}"));
@@ -163,7 +287,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(messageService.updateStatusByServerMsgId("srv-mq", "ACKED")).thenReturn(1);
         when(messageService.enqueueStatusNotify(saved, "ACKED")).thenReturn(true);
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(20L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"ACK_REPORT\",\"serverMsgId\":\"srv-mq\",\"status\":\"ACKED\"}"));
@@ -176,7 +300,7 @@ class WebSocketFrameHandlerIntegrationTest {
 
     @Test
     void ackReportShouldRejectInvalidStatus() throws Exception {
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(metricsService));
         channel.attr(NettyAttr.USER_ID).set(20L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"ACK_REPORT\",\"serverMsgId\":\"srv-bad\",\"status\":\"READ\"}"));
@@ -192,7 +316,7 @@ class WebSocketFrameHandlerIntegrationTest {
      * 方法说明。
      */
     void pullOfflineShouldSupportStableCursorPaginationAndValidateParams() throws Exception {
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(2L);
 
         Instant base = Instant.parse("2026-03-25T00:00:00Z");
@@ -245,7 +369,7 @@ class WebSocketFrameHandlerIntegrationTest {
     @Test
     void pullOfflineShouldReturnNextSyncTokenOnEmptyPageAndAdvanceOnlyAfterSuccessfulWrite() throws Exception {
         EmbeddedChannel channel = new EmbeddedChannel(
-                new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null)
+                newHandler(null)
         );
         channel.attr(NettyAttr.USER_ID).set(2L);
 
@@ -265,7 +389,7 @@ class WebSocketFrameHandlerIntegrationTest {
     @Test
     void pullOfflineShouldReturnReusableInitSyncTokenWhenNoCheckpointAndNoMessages() throws Exception {
         EmbeddedChannel channel = new EmbeddedChannel(
-                new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null)
+                newHandler(null)
         );
         channel.attr(NettyAttr.USER_ID).set(2L);
 
@@ -286,7 +410,7 @@ class WebSocketFrameHandlerIntegrationTest {
     @Test
     void pullOfflineShouldNotAdvanceCheckpointWhenWriteFails() {
         EmbeddedChannel channel = new EmbeddedChannel(
-                new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null),
+                newHandler(null),
                 new ChannelOutboundHandlerAdapter() {
                     @Override
                     public void write(io.netty.channel.ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
@@ -310,7 +434,7 @@ class WebSocketFrameHandlerIntegrationTest {
     void reconnectSyncShouldNotAdvanceCheckpointWhenBatchWriteFails() {
         AtomicInteger writeCount = new AtomicInteger();
         EmbeddedChannel channel = new EmbeddedChannel(
-                new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null),
+                newHandler(null),
                 new ChannelOutboundHandlerAdapter() {
                     @Override
                     public void write(io.netty.channel.ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
@@ -341,7 +465,7 @@ class WebSocketFrameHandlerIntegrationTest {
 
     @Test
     void pullOfflineShouldReturnStructuredFileMessage() throws Exception {
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(2L);
 
         MessageDO fileMessage = msg(10L, "sf-1", Date.from(Instant.parse("2026-03-25T00:00:00Z")), "cf-1");
@@ -359,7 +483,7 @@ class WebSocketFrameHandlerIntegrationTest {
 
     @Test
     void pullOfflineShouldMaskRetractedMessageContent() throws Exception {
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(2L);
 
         MessageDO recalled = msg(20L, "srv-r1", Date.from(Instant.parse("2026-03-25T00:00:00Z")), "cid-r1");
@@ -382,7 +506,7 @@ class WebSocketFrameHandlerIntegrationTest {
      * 方法说明。
      */
     void reconnectSyncShouldUseAccurateHasMoreAndOnlyTriggerOnce() throws Exception {
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(100L);
         channel.attr(NettyAttr.AUTH_OK).set(Boolean.TRUE);
 
@@ -415,7 +539,7 @@ class WebSocketFrameHandlerIntegrationTest {
      * 方法说明。
      */
     void chatShouldNotPublishEventForIdempotentReplay() throws Exception {
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         when(messageService.persistMessage(any(MessageDO.class))).thenReturn(new MessageService.PersistResult("existing-1", false));
@@ -433,7 +557,7 @@ class WebSocketFrameHandlerIntegrationTest {
         nettyProperties.setSingleChatRequireActiveContact(true);
         when(contactService.isActiveContact(1L, 2L)).thenReturn(true);
         when(contactService.isActiveContact(2L, 1L)).thenReturn(false);
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CHAT\",\"targetUserId\":2,\"content\":\"hello\"}"));
@@ -454,9 +578,8 @@ class WebSocketFrameHandlerIntegrationTest {
         RedisStateProperties redisStateProperties = new RedisStateProperties();
         redisStateProperties.setClientMsgIdTtlSeconds(60);
 
-        EmbeddedChannel forbiddenChannel = new EmbeddedChannel(new WebSocketFrameHandler(
-                channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties,
-                deliveryMapper, metricsService, null, null, idempotencyService, null, null, redisStateProperties));
+        EmbeddedChannel forbiddenChannel = new EmbeddedChannel(newHandler(
+                metricsService, null, null, idempotencyService, null, null, redisStateProperties));
         forbiddenChannel.attr(NettyAttr.USER_ID).set(1L);
 
         forbiddenChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"CHAT\",\"targetUserId\":2,\"clientMsgId\":\"cid-contact\",\"content\":\"hello\"}"));
@@ -467,20 +590,18 @@ class WebSocketFrameHandlerIntegrationTest {
         verify(idempotencyService, never()).releaseClientMessage(anyLong(), anyString());
 
         when(contactService.isActiveContact(2L, 1L)).thenReturn(true);
-        when(idempotencyService.claimClientMessage(eq(1L), eq("cid-fail"), any())).thenReturn(true);
         when(messageService.persistMessage(any(MessageDO.class))).thenThrow(new RuntimeException("db down"));
 
-        EmbeddedChannel persistFailChannel = new EmbeddedChannel(new WebSocketFrameHandler(
-                channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties,
-                deliveryMapper, metricsService, null, null, idempotencyService, null, null, redisStateProperties));
+        EmbeddedChannel persistFailChannel = new EmbeddedChannel(newHandler(
+                metricsService, null, null, idempotencyService, null, null, redisStateProperties));
         persistFailChannel.attr(NettyAttr.USER_ID).set(1L);
 
         persistFailChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"CHAT\",\"targetUserId\":2,\"clientMsgId\":\"cid-fail\",\"content\":\"hello\"}"));
         JsonNode error = readOutboundJson(persistFailChannel).get(0);
 
         assertEquals("INTERNAL_ERROR", error.get("code").asText());
-        verify(idempotencyService).claimClientMessage(eq(1L), eq("cid-fail"), any());
-        verify(idempotencyService).releaseClientMessage(1L, "cid-fail");
+        verify(idempotencyService, never()).claimClientMessage(eq(1L), eq("cid-fail"), any());
+        verify(idempotencyService, never()).releaseClientMessage(1L, "cid-fail");
     }
 
     @Test
@@ -488,7 +609,7 @@ class WebSocketFrameHandlerIntegrationTest {
         nettyProperties.setSingleChatRequireActiveContact(false);
         when(messageService.persistMessage(any(MessageDO.class))).thenReturn(new MessageService.PersistResult("srv-allow", true));
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CHAT\",\"targetUserId\":2,\"content\":\"hello\"}"));
@@ -503,8 +624,7 @@ class WebSocketFrameHandlerIntegrationTest {
     void chatShouldRejectWhenSensitiveWordHit() throws Exception {
         when(messageService.persistMessage(any(MessageDO.class))).thenThrow(new SensitiveWordHitException());
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(
-                channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(metricsService));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CHAT\",\"targetUserId\":2,\"content\":\"badword message\"}"));
@@ -519,8 +639,7 @@ class WebSocketFrameHandlerIntegrationTest {
     void chatShouldAllowWhenSensitiveSwitchDisabled() throws Exception {
         when(messageService.persistMessage(any(MessageDO.class))).thenReturn(new MessageService.PersistResult("srv-sensitive-off", true));
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(
-                channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(metricsService));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CHAT\",\"targetUserId\":2,\"content\":\"badword message\"}"));
@@ -534,8 +653,7 @@ class WebSocketFrameHandlerIntegrationTest {
     void chatShouldSupportFileMessage() throws Exception {
         when(messageService.persistMessage(any(MessageDO.class))).thenReturn(new MessageService.PersistResult("srv-file-1", true));
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(
-                channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(metricsService));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("""
@@ -552,8 +670,7 @@ class WebSocketFrameHandlerIntegrationTest {
 
     @Test
     void chatShouldRejectFileMessageWithExtraFields() throws Exception {
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(
-                channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(metricsService));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("""
@@ -571,8 +688,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(messageService.persistMessage(any(MessageDO.class)))
                 .thenThrow(new FileTokenBizException("TOKEN_ALREADY_BOUND", "uploadToken already bound"));
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(
-                channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(metricsService));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("""
@@ -587,7 +703,7 @@ class WebSocketFrameHandlerIntegrationTest {
     @Test
     void contactAddShouldReturnResultAndValidateParams() throws Exception {
         when(contactService.addOrActivateContact(1L, 2L)).thenReturn(new ContactService.Result(true, false));
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CONTACT_ADD\",\"peerUserId\":2}"));
@@ -602,7 +718,7 @@ class WebSocketFrameHandlerIntegrationTest {
         assertEquals("ERROR", selfError.get("type").asText());
         assertEquals("INVALID_PARAM", selfError.get("code").asText());
 
-        EmbeddedChannel unauthorized = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel unauthorized = new EmbeddedChannel(newHandler(null));
         unauthorized.writeInbound(new TextWebSocketFrame("{\"type\":\"CONTACT_ADD\",\"peerUserId\":2}"));
         JsonNode unauthorizedError = readOutboundJson(unauthorized).get(0);
         assertEquals("UNAUTHORIZED", unauthorizedError.get("code").asText());
@@ -611,7 +727,7 @@ class WebSocketFrameHandlerIntegrationTest {
     @Test
     void contactRemoveShouldReturnIdempotentResult() throws Exception {
         when(contactService.removeOrDeactivateContact(1L, 2L)).thenReturn(new ContactService.Result(true, true));
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CONTACT_REMOVE\",\"peerUserId\":2}"));
@@ -632,7 +748,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(contactService.listActiveContacts(1L, 3L, 2))
                 .thenReturn(new ContactService.ContactPageResult(List.of(), null, false));
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CONTACT_LIST\",\"limit\":2,\"cursorPeerUserId\":0}"));
@@ -665,7 +781,7 @@ class WebSocketFrameHandlerIntegrationTest {
      * 方法说明。
      */
     void chatValidationShouldRejectInvalidTargetAndBlankContent() throws Exception {
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"CHAT\",\"targetUserId\":0,\"content\":\"hello\"}"));
@@ -696,7 +812,7 @@ class WebSocketFrameHandlerIntegrationTest {
         saved.setCreatedAt(Date.from(Instant.parse("2026-03-25T00:00:00Z")));
         when(messageService.findByServerMsgId("srv-x")).thenReturn(saved);
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(30L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"ACK_REPORT\",\"serverMsgId\":\"srv-x\",\"status\":\"ACKED\"}"));
@@ -718,7 +834,7 @@ class WebSocketFrameHandlerIntegrationTest {
      */
     void groupJoinShouldReturnIdempotentResult() throws Exception {
         when(groupService.joinGroup(101L, 1L)).thenReturn(new GroupService.JoinGroupResult(true, true));
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_JOIN\",\"groupId\":101}"));
@@ -736,7 +852,7 @@ class WebSocketFrameHandlerIntegrationTest {
      */
     void groupQuitShouldReturnIdempotentResult() throws Exception {
         when(groupService.quitGroup(101L, 1L)).thenReturn(new GroupService.QuitGroupResult(true, true));
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_QUIT\",\"groupId\":101}"));
@@ -767,7 +883,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupMessageService.persistMessage(101L, 1L, "c-1", "TEXT", "hello-group"))
                 .thenReturn(new GroupMessageService.PersistResult(saved));
 
-        EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService));
+        EmbeddedChannel senderChannel = new EmbeddedChannel(newHandler(metricsService));
         senderChannel.attr(NettyAttr.USER_ID).set(1L);
 
         senderChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_CHAT\",\"groupId\":101,\"clientMsgId\":\"c-1\",\"content\":\"hello-group\"}"));
@@ -795,9 +911,8 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupMessageService.persistMessage(101L, 1L, "gc-fail", "TEXT", "hello"))
                 .thenThrow(new RuntimeException("db down"));
 
-        EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(
-                channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties,
-                deliveryMapper, metricsService, null, null, idempotencyService, null, null, redisStateProperties));
+        EmbeddedChannel senderChannel = new EmbeddedChannel(newHandler(
+                metricsService, null, null, idempotencyService, null, null, redisStateProperties));
         senderChannel.attr(NettyAttr.USER_ID).set(1L);
 
         senderChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_CHAT\",\"groupId\":101,\"clientMsgId\":\"gc-fail\",\"content\":\"hello\"}"));
@@ -826,7 +941,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupMessageService.persistMessage(eq(101L), eq(1L), eq("c-file"), eq("FILE"), any()))
                 .thenReturn(new GroupMessageService.PersistResult(saved));
 
-        EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService));
+        EmbeddedChannel senderChannel = new EmbeddedChannel(newHandler(metricsService));
         senderChannel.attr(NettyAttr.USER_ID).set(1L);
 
         senderChannel.writeInbound(new TextWebSocketFrame("""
@@ -855,7 +970,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(messageService.findByServerMsgId("srv-recall-1")).thenReturn(existing);
         when(messageService.recallMessage(1L, "srv-recall-1", 120L)).thenReturn(recalled);
 
-        EmbeddedChannel requester = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel requester = new EmbeddedChannel(newHandler(null));
         requester.attr(NettyAttr.USER_ID).set(1L);
 
         requester.writeInbound(new TextWebSocketFrame("{\"type\":\"MSG_RECALL\",\"serverMsgId\":\"srv-recall-1\"}"));
@@ -926,7 +1041,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupMessageService.findByServerMsgId("g-recall-1")).thenReturn(existing);
         when(groupMessageService.recallMessage(1L, "g-recall-1", 120L)).thenReturn(recalled);
 
-        EmbeddedChannel requester = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel requester = new EmbeddedChannel(newHandler(null));
         requester.attr(NettyAttr.USER_ID).set(1L);
 
         requester.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_MSG_RECALL\",\"serverMsgId\":\"g-recall-1\"}"));
@@ -973,8 +1088,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
         when(groupMessageService.persistMessage(101L, 1L, null, "TEXT", "testban group")).thenThrow(new SensitiveWordHitException());
 
-        EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(
-                channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService));
+        EmbeddedChannel senderChannel = new EmbeddedChannel(newHandler(metricsService));
         senderChannel.attr(NettyAttr.USER_ID).set(1L);
 
         senderChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_CHAT\",\"groupId\":101,\"content\":\"testban group\"}"));
@@ -1009,17 +1123,7 @@ class WebSocketFrameHandlerIntegrationTest {
                 .thenReturn(new GroupMessageService.PersistResult(saved));
 
         List<Runnable> submittedTasks = new ArrayList<>();
-        EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(
-                channelUserManager,
-                messageService,
-                contactService,
-                groupService,
-                groupMessageService,
-                nettyProperties,
-                deliveryMapper,
-                metricsService,
-                submittedTasks::add
-        ));
+        EmbeddedChannel senderChannel = new EmbeddedChannel(newHandler(metricsService, submittedTasks::add));
         senderChannel.attr(NettyAttr.USER_ID).set(1L);
 
         senderChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_CHAT\",\"groupId\":101,\"content\":\"parallel-batch\"}"));
@@ -1069,18 +1173,7 @@ class WebSocketFrameHandlerIntegrationTest {
 
         List<Runnable> submittedTasks = new ArrayList<>();
         GroupPushCoordinator coordinator = new GroupPushCoordinator();
-        EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(
-                channelUserManager,
-                messageService,
-                contactService,
-                groupService,
-                groupMessageService,
-                nettyProperties,
-                deliveryMapper,
-                metricsService,
-                submittedTasks::add,
-                coordinator
-        ));
+        EmbeddedChannel senderChannel = new EmbeddedChannel(newHandler(metricsService, submittedTasks::add, coordinator));
         senderChannel.attr(NettyAttr.USER_ID).set(1L);
 
         senderChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_CHAT\",\"groupId\":101,\"content\":\"m1\"}"));
@@ -1120,7 +1213,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupMessageService.persistMessage(101L, 1L, null, "TEXT", "boom"))
                 .thenReturn(new GroupMessageService.PersistResult(saved));
 
-        EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, metricsService, Runnable::run));
+        EmbeddedChannel senderChannel = new EmbeddedChannel(newHandler(metricsService, Runnable::run));
         senderChannel.attr(NettyAttr.USER_ID).set(1L);
 
         senderChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_CHAT\",\"groupId\":101,\"content\":\"boom\"}"));
@@ -1155,14 +1248,7 @@ class WebSocketFrameHandlerIntegrationTest {
         List<Runnable> acceptedTasks = new ArrayList<>();
         AtomicInteger executeCount = new AtomicInteger(0);
 
-        EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(
-                channelUserManager,
-                messageService,
-                contactService,
-                groupService,
-                groupMessageService,
-                nettyProperties,
-                deliveryMapper,
+        EmbeddedChannel senderChannel = new EmbeddedChannel(newHandler(
                 metricsService,
                 command -> {
                     if (executeCount.getAndIncrement() == 0) {
@@ -1187,7 +1273,7 @@ class WebSocketFrameHandlerIntegrationTest {
     @Test
     void groupChatShouldRejectNonMember() throws Exception {
         when(groupService.isActiveMember(101L, 1L)).thenReturn(false);
-        EmbeddedChannel senderChannel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel senderChannel = new EmbeddedChannel(newHandler(null));
         senderChannel.attr(NettyAttr.USER_ID).set(1L);
 
         senderChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_CHAT\",\"groupId\":101,\"content\":\"hello\"}"));
@@ -1203,7 +1289,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupService.quitGroup(101L, 1L)).thenReturn(new GroupService.QuitGroupResult(true, false));
         when(groupService.isActiveMember(101L, 1L)).thenReturn(false);
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_QUIT\",\"groupId\":101}"));
@@ -1237,7 +1323,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupMessageService.pullOffline(101L, 1L, null, 2))
                 .thenReturn(new GroupMessageService.PullResult(List.of(m1, m2), false, 12L));
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_PULL_OFFLINE\",\"groupId\":101,\"limit\":2}"));
@@ -1264,7 +1350,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupMessageService.pullOffline(101L, 1L, null, 1))
                 .thenReturn(new GroupMessageService.PullResult(List.of(fileMessage), false, 31L));
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_PULL_OFFLINE\",\"groupId\":101,\"limit\":1}"));
@@ -1290,7 +1376,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupMessageService.pullOffline(101L, 1L, null, 1))
                 .thenReturn(new GroupMessageService.PullResult(List.of(recalled), false, 41L));
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_PULL_OFFLINE\",\"groupId\":101,\"limit\":1}"));
@@ -1321,7 +1407,7 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupMessageService.pullOffline(101L, 1L, 20L, 2))
                 .thenReturn(new GroupMessageService.PullResult(List.of(m1, m2), true, 22L));
 
-        EmbeddedChannel channel = new EmbeddedChannel(new WebSocketFrameHandler(channelUserManager, messageService, contactService, groupService, groupMessageService, nettyProperties, deliveryMapper, null));
+        EmbeddedChannel channel = new EmbeddedChannel(newHandler(null));
         channel.attr(NettyAttr.USER_ID).set(1L);
 
         channel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_PULL_OFFLINE\",\"groupId\":101,\"limit\":2,\"cursorSeq\":20}"));

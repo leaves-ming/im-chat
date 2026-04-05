@@ -10,6 +10,7 @@ public final class SocialApiPaths {
     public static final String CONTACT_REMOVE = "/contact/remove";
     public static final String CONTACT_LIST = "/contact/list";
     public static final String CONTACT_ACTIVE_CHECK = "/contact/active/check";
+    public static final String GROUP_CREATE = "/group/create";
     public static final String GROUP_JOIN = "/group/join";
     public static final String GROUP_QUIT = "/group/quit";
     public static final String GROUP_MEMBER_LIST = "/group/member/list";
