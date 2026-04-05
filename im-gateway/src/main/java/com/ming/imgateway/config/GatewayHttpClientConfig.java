@@ -2,6 +2,7 @@ package com.ming.imgateway.config;
 
 import org.springframework.cloud.client.loadbalancer.reactive.ReactorLoadBalancerExchangeFilterFunction;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -13,6 +14,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 public class GatewayHttpClientConfig {
 
     @Bean
+    @ConditionalOnMissingBean(WebClient.Builder.class)
     public WebClient.Builder gatewayWebClientBuilder() {
         return WebClient.builder();
     }
@@ -20,10 +22,11 @@ public class GatewayHttpClientConfig {
     @Bean
     public WebClient gatewayWebClient(WebClient.Builder builder,
                                       ObjectProvider<ReactorLoadBalancerExchangeFilterFunction> lbFunctionProvider) {
+        WebClient.Builder targetBuilder = builder.clone();
         ReactorLoadBalancerExchangeFilterFunction lbFunction = lbFunctionProvider.getIfAvailable();
         if (lbFunction != null) {
-            builder.filter(lbFunction);
+            targetBuilder.filter(lbFunction);
         }
-        return builder.build();
+        return targetBuilder.build();
     }
 }
