@@ -22,6 +22,7 @@ import com.ming.imapicontract.message.RecallSingleMessageResponse;
 import com.ming.immessageservice.config.MessageServiceProperties;
 import com.ming.immessageservice.domain.service.GroupMessageDomainService;
 import com.ming.immessageservice.domain.service.SingleMessageDomainService;
+import com.ming.immessageservice.remote.file.FileServiceClient;
 import org.springframework.stereotype.Service;
 
 /**
@@ -33,22 +34,26 @@ public class MessageCommandApplicationService {
     private final SingleMessageDomainService singleMessageDomainService;
     private final GroupMessageDomainService groupMessageDomainService;
     private final MessageServiceProperties messageServiceProperties;
+    private final FileServiceClient fileServiceClient;
 
     public MessageCommandApplicationService(SingleMessageDomainService singleMessageDomainService,
                                             GroupMessageDomainService groupMessageDomainService,
-                                            MessageServiceProperties messageServiceProperties) {
+                                            MessageServiceProperties messageServiceProperties,
+                                            FileServiceClient fileServiceClient) {
         this.singleMessageDomainService = singleMessageDomainService;
         this.groupMessageDomainService = groupMessageDomainService;
         this.messageServiceProperties = messageServiceProperties;
+        this.fileServiceClient = fileServiceClient;
     }
 
     public PersistSingleMessageResponse persistSingleMessage(PersistSingleMessageRequest request) {
+        String content = normalizeContent(request.msgType(), request.content(), request.fromUserId());
         SingleMessageDomainService.PersistResult result = singleMessageDomainService.persistSingleMessage(
                 request.fromUserId(),
                 request.targetUserId(),
                 request.clientMsgId(),
                 request.msgType(),
-                request.content());
+                content);
         return new PersistSingleMessageResponse(request.clientMsgId(), result.serverMsgId(), result.createdNew());
     }
 
@@ -61,8 +66,9 @@ public class MessageCommandApplicationService {
     }
 
     public PersistGroupMessageResponse persistGroupMessage(PersistGroupMessageRequest request) {
+        String content = normalizeContent(request.msgType(), request.content(), request.fromUserId());
         return new PersistGroupMessageResponse(groupMessageDomainService.persistMessage(
-                request.groupId(), request.fromUserId(), request.clientMsgId(), request.msgType(), request.content()));
+                request.groupId(), request.fromUserId(), request.clientMsgId(), request.msgType(), content));
     }
 
     public PullOfflineResponse pullOffline(PullOfflineRequest request) {
@@ -110,5 +116,27 @@ public class MessageCommandApplicationService {
         boolean allowed = singleMessageDomainService.hasFileAccess(request.fileId(), request.userId())
                 || groupMessageDomainService.hasFileAccess(request.fileId(), request.userId());
         return new CheckFileAccessResponse(allowed);
+    }
+
+    private String normalizeContent(String msgType, String content, Long senderUserId) {
+        if (!"FILE".equalsIgnoreCase(msgType)) {
+            return content;
+        }
+        var response = fileServiceClient.consumeUploadToken(new com.ming.imapicontract.file.ConsumeUploadTokenRequest(content, senderUserId));
+        if (response == null) {
+            throw new IllegalStateException("file service response is null");
+        }
+        if (response.isSuccess() && response.getData() != null) {
+            return response.getData().canonicalContent();
+        }
+        String code = response.getCode();
+        String message = response.getMessage();
+        if ("FORBIDDEN".equals(code)) {
+            throw new SecurityException(message);
+        }
+        if ("TOKEN_ALREADY_BOUND".equals(code) || "INVALID_PARAM".equals(code)) {
+            throw new IllegalArgumentException(message);
+        }
+        throw new IllegalStateException(message == null ? "file service unavailable" : message);
     }
 }

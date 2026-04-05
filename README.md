@@ -11,6 +11,9 @@
 ```text
 im/
 ├── im-chat-server/                 # 主服务（Netty + WebSocket + 业务处理）
+├── im-message-service/             # 消息域服务（消息持久化、离线同步、文件访问关系校验）
+├── im-file-service/                # 文件域服务（文件 I/O、uploadToken、签名下载、下载鉴权）
+├── im-gateway/                     # HTTP / WebSocket 网关
 ├── im-tools/
 │   ├── im-common-starter/          # 预留通用模块
 │   └── im-frequency-control/       # 预留频控模块
@@ -55,8 +58,9 @@ im/
 - backlog 口径包含 `NEW/FAILED/PROCESSING`，支持 `PROCESSING` 超时回收。
 - Redis 跨实例状态
 - 提供 `PresenceService / IdempotencyService / RateLimitService / DistributedCoordinationService`，统一管理在线视图、短期防重放、固定窗口限流和 Redisson 协调锁。
-- 文件消息（服务端信任模型）
-- 支持 `POST /api/file/upload` 本地上传返回 `uploadToken`，`CHAT / GROUP_CHAT` 在 `FILE` 消息中仅传 `uploadToken`，服务端回填结构化文件内容。
+- 文件消息（文件域已拆分）
+- `im-chat-server` 只保留鉴权入口与薄代理；文件 I/O、uploadToken 状态机、签名下载、下载鉴权统一下沉到 `im-file-service`。
+- `im-message-service` 在持久化 `FILE` 消息前会远程调用 `im-file-service` 消费 `uploadToken`，并回填标准文件内容。
 
 ## 3. 单聊流程闭环（当前实现）
 
@@ -439,6 +443,11 @@ curl -X POST 'http://127.0.0.1:8080/api/file/upload' \
   -F 'file=@./design.pdf'
 ```
 
+5. 独立启动文件服务：
+```bash
+mvn -pl im-file-service spring-boot:run
+```
+
 ## 6. 测试
 
 执行 `im-chat-server` 测试：
@@ -503,6 +512,8 @@ mvn -pl im-chat-server test
 - `msgType=FILE` 时 `content` 仅允许 `{"uploadToken":"..."}`，带其它字段会被拒绝。
 - 重复消费同一个 token 返回业务错误 `TOKEN_ALREADY_BOUND`。
 - FILE 内容中的 `url` 字段保留用于兼容展示，不再作为客户端直接下载入口。
+- 下载鉴权统一由 `im-file-service` 执行：优先 owner 直下，否则回查 `im-message-service` 的消息关联访问权。
+- 网关已放行 `/files/**` 到 `im-file-service`，签名下载链路可独立扩容。
 
 上传响应：
 ```json
