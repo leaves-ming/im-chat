@@ -2,6 +2,12 @@
 
 一个基于 `Spring Boot + Netty + WebSocket + MySQL + MyBatis` 的自建 IM 服务端项目。
 
+当前仓库已从单体 `im-chat-server` 演进为按领域拆分的多模块单仓：
+- `im-chat-server`：连接接入、WebSocket 协议处理、在线推送、路由与聚合编排
+- `im-message-service`：消息持久化、ACK 状态推进、离线同步、群消息查询
+- `im-file-service`：文件上传、`uploadToken` 消费、签名下载、文件访问鉴权
+- `im-gateway`：HTTP / WebSocket 网关转发
+
 当前仓库目标：
 - 可运行的单聊主链路（鉴权、长连接、消息落库、在线推送、ACK、离线拉取）
 - 联系人能力与单聊联系人门禁
@@ -28,7 +34,7 @@ im/
 
 ## 2. 当前能力（已实现）
 
-`im-chat-server` 已实现以下核心能力：
+当前主链路能力由 `im-chat-server + im-message-service + im-file-service` 共同提供：
 
 - 登录鉴权
 - `POST /api/auth/login` 登录，校验用户名密码并签发 JWT。
@@ -38,7 +44,7 @@ im/
 - 在线连接管理
 - 基于 `ChannelUserManager` 维护 `userId <-> Channel` 双向映射，支持一人多端。
 - 单聊消息主链路
-- 客户端 `CHAT` -> 服务端校验并落库 -> 发布事件 -> 异步推送给目标在线端。
+- 客户端 `CHAT` -> `im-chat-server` 解析协议并调用 `im-message-service` 落库 -> 异步推送给目标在线端。
 - 联系人能力
 - 支持 `CONTACT_ADD / CONTACT_REMOVE / CONTACT_LIST`，维护单向联系人关系，分页返回 ACTIVE 联系人。
 - 幂等与状态推进
@@ -50,8 +56,8 @@ im/
 - 心跳与连接清理
 - 支持 Ping/Pong 与空闲检测，断连时清理映射。
 - 敏感词过滤
-- 支持本地词库 + 内存 Trie/DFA，文本消息统一经 service 层前置过滤。
-- 支持 `REJECT` / `REPLACE` 两种模式、命中指标、脱敏日志和词库加载失败策略。
+- 敏感词过滤已统一收敛到 `im-message-service` 持久化入口，任何消息入口只要进入消息服务都会执行统一过滤。
+- 支持本地词库 + 内存 Trie/DFA，支持 `REJECT` / `REPLACE` 两种模式、脱敏日志和词库加载失败策略。
 - 群推送优化
 - `GROUP_CHAT` 采用预聚合在线 channel、分批异步推送与失败统计，降低大群推送对 I/O 线程的冲击。
 - Outbox 稳定性
@@ -71,13 +77,13 @@ im/
 3. A 发送 `CHAT`（包含 `targetUserId/content/clientMsgId`）。
 4. 服务端先落库（生成 `serverMsgId`，幂等判断）。
 5. 发布 `MessagePersistedEvent`，异步推送到 B 的在线连接。
-6. A 收到 `DELIVER_ACK`（确认服务端已接收并处理）。
+6. A 收到 `SERVER_ACK`（确认服务端已完成持久化处理）。
 7. B 收到 `CHAT_DELIVER` 后可上报 `ACK_REPORT`，把消息状态推进到 `DELIVERED` 或 `ACKED`。
 8. 服务端更新消息状态，并通知 A `MSG_STATUS_NOTIFY`。
 
 ### 3.2 离线场景
 
-- 若 B 不在线：A 仍收到 `DELIVER_ACK`，附带 `info=TARGET_OFFLINE`。
+- 若 B 不在线：A 仍收到 `SERVER_ACK`，消息由离线同步链路兜底。
 - B 下次上线：
 - 握手后自动收到最近一批 `SYNC_BATCH`。
 - 或主动发送 `PULL_OFFLINE` 按游标拉取。
@@ -195,13 +201,14 @@ im/
 }
 ```
 
-`DELIVER_ACK`
+`SERVER_ACK`
 ```json
 {
-  "type": "DELIVER_ACK",
+  "type": "SERVER_ACK",
   "clientMsgId": "c-10001",
   "serverMsgId": "d0f7...",
-  "status": "SENT"
+  "status": "PERSISTED",
+  "createdNew": true
 }
 ```
 
@@ -328,9 +335,9 @@ im/
 
 ## 4.5 敏感词过滤
 
-- 接入范围：`CHAT` 与 `GROUP_CHAT` 的文本消息。
-- 过滤时机：消息入库前。
-- service 层统一入口：`SensitiveWordService.filter(text)` / `check(text)`。
+- 接入范围：单聊与群聊消息统一在 `im-message-service` 持久化入口过滤。
+- 过滤时机：`im-message-service` 中 `normalizeContent` 之后、domain service 调用之前。
+- 统一入口：`im-message-service` 的 `MessageCommandApplicationService.persistSingleMessage / persistGroupMessage`。
 - 统一结果：`hit`、`mode`、`matchedWord`、`outputText`。
 - 模式说明：
   - `REJECT`：命中后返回 `ERROR(code=SENSITIVE_WORD_HIT, msg=\"message contains sensitive words\")`，不落库、不推送、不进入离线补拉。
@@ -341,7 +348,7 @@ im/
   - `im.sensitive.fail-open=false`：词库加载失败时拒绝消息，返回 `ERROR(code=SENSITIVE_WORD_UNAVAILABLE, ...)`。
 - 实现方式：
   - 词库来源：本地文件
-  - 默认位置：`im-chat-server/src/main/resources/sensitive_words.txt`
+  - 默认位置：`im-message-service/src/main/resources/sensitive_words.txt`
   - 匹配方式：内存 Trie / DFA 前缀树
 - 可观测性：
   - 指标：`im_sensitive_check_total`、`im_sensitive_hit_total`、`im_sensitive_replace_total`
@@ -375,8 +382,9 @@ CREATE DATABASE IF NOT EXISTS im_chat DEFAULT CHARACTER SET utf8mb4;
 
 ## 5.3 调整配置
 
-编辑 `im-chat-server/src/main/resources/application.yml`：
-- `spring.datasource.url/username/password`
+按服务分别调整 `src/main/resources/application.yaml`：
+
+- `im-chat-server`
 - `im.auth.jwt.secret`（必须替换）
 - `im.netty.port`（默认 `8080`）
 - `im.netty.max-content-length`（默认与 `im.file.max-file-size-bytes` 一致，默认 `10485760`）
@@ -385,28 +393,33 @@ CREATE DATABASE IF NOT EXISTS im_chat DEFAULT CHARACTER SET utf8mb4;
 - `im.netty.group-push-parallelism`（默认 `4`，群推送调度线程并行度）
 - `im.netty.group-push-queue-capacity`（默认 `1000`，群推送调度队列容量）
 - `im.reliability.processing-timeout-ms`（默认 `30000`，PROCESSING 超时回收阈值）
-- `im.sensitive.enabled`（默认 `false`，是否启用敏感词过滤）
-- `im.sensitive.mode`（默认 `REJECT`，支持 `REJECT` / `REPLACE`）
-- `im.sensitive.word-source`（默认 `classpath:sensitive_words.txt`）
-- `im.sensitive.fail-open`（默认 `true`，词库加载失败时是否放行）
-- `im.file.local-base-dir`（默认 `data/uploads`，本地文件存储目录）
-- `im.file.public-url-prefix`（默认 `/files`，本地文件公开访问前缀）
-- `im.file.max-file-size-bytes`（默认 `10485760`，单文件大小限制）
-- `im.file.upload-token-expire-seconds`（默认 `900`，上传凭证有效期）
-- `im.file.download-sign-secret`（必填，本地文件私有下载签名密钥）
-- `im.file.download-sign-expire-seconds`（默认 `300`，下载签名有效期）
-- `im.file.download-sign-one-time`（默认 `false`，开启后签名仅可成功消费一次，依赖 Redis）
-- `im.file.allow-owner-download-without-message`（默认 `true`，文件 owner 可直接下载）
-- `im.file.allowed-content-types`（允许上传的 MIME 类型）
-- `im.file.allowed-extensions`（允许上传的扩展名）
 - `im.redis.server-id`（当前实例 ID，用于跨机在线端记录与协调 owner 标识）
 - `im.redis.presence-ttl-seconds`（默认 `180`，在线端 TTL）
 - `im.redis.client-msg-id-ttl-seconds`（默认 `600`，`clientMsgId` 短期幂等窗口）
 - `im.rate-limit.login-fail.*`（登录失败限流窗口）
 - `im.rate-limit.message-send.*`（消息发送限流窗口）
+- `redisson.single-server-config.address`（Redisson 单机 Redis 连接）
+
+- `im-message-service`
+- `spring.datasource.url/username/password`
+- `im.sensitive.enabled`（默认 `false`，是否启用敏感词过滤）
+- `im.sensitive.mode`（默认 `REJECT`，支持 `REJECT` / `REPLACE`）
+- `im.sensitive.word-source`（默认 `classpath:sensitive_words.txt`）
+- `im.sensitive.fail-open`（默认 `true`，词库加载失败时是否放行）
+
+- `im-file-service`
+- `im.file.local-base-dir`（默认 `data/uploads`，本地文件存储目录）
+- `im.file.public-url-prefix`（默认 `/files`，本地文件公开访问前缀）
+- `im.file.max-file-size-bytes`（默认 `10485760`，单文件大小限制）
+- `im.file.upload-token-expire-seconds`（默认 `900`，上传凭证有效期）
+- `im.file.download-sign-secret`（必填，私有下载签名密钥）
+- `im.file.download-sign-expire-seconds`（默认 `300`，下载签名有效期）
+- `im.file.download-sign-one-time`（默认 `false`，开启后签名仅可成功消费一次，依赖 Redis）
+- `im.file.allow-owner-download-without-message`（默认 `true`，文件 owner 可直接下载）
+- `im.file.allowed-content-types`（允许上传的 MIME 类型）
+- `im.file.allowed-extensions`（允许上传的扩展名）
 - `im.rate-limit.file-upload.*`（文件上传限流窗口）
 - `im.rate-limit.file-download.*`（文件下载限流窗口）
-- `redisson.single-server-config.address`（Redisson 单机 Redis 连接）
 
 ## 5.4 启动服务
 
@@ -414,6 +427,13 @@ CREATE DATABASE IF NOT EXISTS im_chat DEFAULT CHARACTER SET utf8mb4;
 
 ```bash
 mvn -pl im-chat-server -am spring-boot:run
+```
+
+如需完整主链路，至少还需要启动：
+
+```bash
+mvn -pl im-message-service -am spring-boot:run
+mvn -pl im-file-service -am spring-boot:run
 ```
 
 ## 5.5 调试示例
@@ -446,6 +466,11 @@ curl -X POST 'http://127.0.0.1:8080/api/file/upload' \
 5. 独立启动文件服务：
 ```bash
 mvn -pl im-file-service spring-boot:run
+```
+
+6. 独立启动消息服务：
+```bash
+mvn -pl im-message-service spring-boot:run
 ```
 
 ## 6. 测试
