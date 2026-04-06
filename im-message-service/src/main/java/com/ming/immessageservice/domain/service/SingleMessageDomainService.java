@@ -86,7 +86,7 @@ public class SingleMessageDomainService {
         if (updated > 0) {
             dispatchOutboxDomainService.appendStatusNotify(latest, targetStatus, latest.getFromUserId());
         }
-        return new AckResult(toMessageDTO(latest), targetStatus, updated, ackAt);
+        return new AckResult(toMessageDTO(latest), targetStatus, updated, ackAt, updated > 0);
     }
 
     public CursorPageDTO pullOffline(Long userId, String deviceId, SyncCursorDTO syncCursor, int limit, boolean useCheckpoint) {
@@ -303,6 +303,10 @@ public class SingleMessageDomainService {
     public record PersistResult(String serverMsgId, boolean createdNew) {
     }
 
-    public record AckResult(MessageDTO message, String status, int updated, Date ackAt) {
+    public record AckResult(MessageDTO message,
+                            String status,
+                            int updated,
+                            Date ackAt,
+                            boolean statusNotifyAppended) {
     }
 }

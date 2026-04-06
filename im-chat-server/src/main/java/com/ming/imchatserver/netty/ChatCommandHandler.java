@@ -102,7 +102,7 @@ public class ChatCommandHandler implements WsCommandHandler {
         resp.put("status", targetStatus);
         resp.put("updated", result.updated());
         protocolSupport.sendJson(context.channel(), resp);
-        if (result.updated() > 0 && !enqueueDistributedNotify(result.message(), result.status())) {
+        if (result.updated() > 0 && !result.statusNotifyAppended()) {
             ObjectNode notify = protocolSupport.mapper().createObjectNode();
             notify.put("type", "MSG_STATUS_NOTIFY");
             notify.put("serverMsgId", serverMsgId);
@@ -113,10 +113,6 @@ public class ChatCommandHandler implements WsCommandHandler {
                 channel.writeAndFlush(new io.netty.handler.codec.http.websocketx.TextWebSocketFrame(payload));
             }
         }
-    }
-
-    private boolean enqueueDistributedNotify(SingleMessageView message, String status) {
-        return messageFacade.enqueueStatusNotify(message, status);
     }
 
     private void handlePullOffline(WsCommandContext context) throws Exception {

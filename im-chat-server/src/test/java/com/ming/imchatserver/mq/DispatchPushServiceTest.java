@@ -2,10 +2,11 @@ package com.ming.imchatserver.mq;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ming.imchatserver.application.model.GroupMessageView;
 import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imchatserver.netty.ChannelUserManager;
-import com.ming.imchatserver.service.remote.RemoteGroupMessageService;
 import com.ming.imchatserver.service.remote.RemoteGroupService;
+import com.ming.imchatserver.service.query.GroupMessageQueryPort;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import org.junit.jupiter.api.Test;
@@ -26,7 +27,7 @@ class DispatchPushServiceTest {
     @Test
     void dispatchSingleShouldHandleExplicitRecallEvent() throws Exception {
         ChannelUserManager channelUserManager = mock(ChannelUserManager.class);
-        RemoteGroupMessageService groupMessageService = mock(RemoteGroupMessageService.class);
+        GroupMessageQueryPort groupMessageQueryPort = mock(GroupMessageQueryPort.class);
         RemoteGroupService groupService = mock(RemoteGroupService.class);
         EmbeddedChannel recipient = new EmbeddedChannel();
         EmbeddedChannel senderOther = new EmbeddedChannel();
@@ -35,7 +36,7 @@ class DispatchPushServiceTest {
 
         RedisStateProperties redisStateProperties = new RedisStateProperties();
         redisStateProperties.setServerId("node-b");
-        DispatchPushService service = new DispatchPushService(channelUserManager, groupMessageService, groupService, redisStateProperties);
+        DispatchPushService service = new DispatchPushService(channelUserManager, groupMessageQueryPort, groupService, redisStateProperties);
         DispatchMessagePayload payload = new DispatchMessagePayload();
         payload.setEventType(DispatchMessagePayload.EVENT_TYPE_RECALL);
         payload.setOriginServerId("node-a");
@@ -71,7 +72,7 @@ class DispatchPushServiceTest {
     @Test
     void dispatchSingleShouldSkipSenderOnOriginNodeForRecallEvent() throws Exception {
         ChannelUserManager channelUserManager = mock(ChannelUserManager.class);
-        RemoteGroupMessageService groupMessageService = mock(RemoteGroupMessageService.class);
+        GroupMessageQueryPort groupMessageQueryPort = mock(GroupMessageQueryPort.class);
         RemoteGroupService groupService = mock(RemoteGroupService.class);
         EmbeddedChannel recipient = new EmbeddedChannel();
         EmbeddedChannel senderOther = new EmbeddedChannel();
@@ -80,7 +81,7 @@ class DispatchPushServiceTest {
 
         RedisStateProperties redisStateProperties = new RedisStateProperties();
         redisStateProperties.setServerId("node-a");
-        DispatchPushService service = new DispatchPushService(channelUserManager, groupMessageService, groupService, redisStateProperties);
+        DispatchPushService service = new DispatchPushService(channelUserManager, groupMessageQueryPort, groupService, redisStateProperties);
 
         DispatchMessagePayload payload = new DispatchMessagePayload();
         payload.setEventType(DispatchMessagePayload.EVENT_TYPE_RECALL);
@@ -105,12 +106,12 @@ class DispatchPushServiceTest {
     @Test
     void dispatchSingleShouldDeliverStatusNotifyToSender() throws Exception {
         ChannelUserManager channelUserManager = mock(ChannelUserManager.class);
-        RemoteGroupMessageService groupMessageService = mock(RemoteGroupMessageService.class);
+        GroupMessageQueryPort groupMessageQueryPort = mock(GroupMessageQueryPort.class);
         RemoteGroupService groupService = mock(RemoteGroupService.class);
         EmbeddedChannel sender = new EmbeddedChannel();
         when(channelUserManager.getChannels(1L)).thenReturn(List.of(sender));
 
-        DispatchPushService service = new DispatchPushService(channelUserManager, groupMessageService, groupService, new RedisStateProperties());
+        DispatchPushService service = new DispatchPushService(channelUserManager, groupMessageQueryPort, groupService, new RedisStateProperties());
         DispatchMessagePayload payload = new DispatchMessagePayload();
         payload.setEventType(DispatchMessagePayload.EVENT_TYPE_STATUS_NOTIFY);
         payload.setServerMsgId("srv-s1");
@@ -130,7 +131,7 @@ class DispatchPushServiceTest {
     @Test
     void dispatchGroupRecallShouldNotSkipOriginNodeMembers() throws Exception {
         ChannelUserManager channelUserManager = mock(ChannelUserManager.class);
-        RemoteGroupMessageService groupMessageService = mock(RemoteGroupMessageService.class);
+        GroupMessageQueryPort groupMessageQueryPort = mock(GroupMessageQueryPort.class);
         RemoteGroupService groupService = mock(RemoteGroupService.class);
         EmbeddedChannel member1 = new EmbeddedChannel();
         EmbeddedChannel member2 = new EmbeddedChannel();
@@ -140,7 +141,7 @@ class DispatchPushServiceTest {
 
         RedisStateProperties redisStateProperties = new RedisStateProperties();
         redisStateProperties.setServerId("node-a");
-        DispatchPushService service = new DispatchPushService(channelUserManager, groupMessageService, groupService, redisStateProperties);
+        DispatchPushService service = new DispatchPushService(channelUserManager, groupMessageQueryPort, groupService, redisStateProperties);
         DispatchMessagePayload payload = new DispatchMessagePayload();
         payload.setEventType(DispatchMessagePayload.EVENT_TYPE_RECALL);
         payload.setOriginServerId("node-a");
@@ -153,6 +154,47 @@ class DispatchPushServiceTest {
         payload.setCreatedAt("2026-03-25T00:00:00Z");
         payload.setRetractedAt("2026-03-25T00:01:00Z");
         payload.setRetractedBy(1L);
+
+        service.dispatchGroup(payload);
+
+        assertEquals("GROUP_MSG_RECALL_NOTIFY", mapper.readTree(((TextWebSocketFrame) member1.readOutbound()).text()).get("type").asText());
+        assertEquals("GROUP_MSG_RECALL_NOTIFY", mapper.readTree(((TextWebSocketFrame) member2.readOutbound()).text()).get("type").asText());
+    }
+
+    @Test
+    void dispatchGroupShouldUseQueryPortAndDowngradeToRecallWhenCurrentMessageRetracted() throws Exception {
+        ChannelUserManager channelUserManager = mock(ChannelUserManager.class);
+        GroupMessageQueryPort groupMessageQueryPort = mock(GroupMessageQueryPort.class);
+        RemoteGroupService groupService = mock(RemoteGroupService.class);
+        EmbeddedChannel member1 = new EmbeddedChannel();
+        EmbeddedChannel member2 = new EmbeddedChannel();
+        when(groupService.listActiveMemberUserIds(101L)).thenReturn(List.of(1L, 2L));
+        when(channelUserManager.getChannels(1L)).thenReturn(List.of(member1));
+        when(channelUserManager.getChannels(2L)).thenReturn(List.of(member2));
+        when(groupMessageQueryPort.findByServerMsgId("g-msg-1")).thenReturn(new GroupMessageView(
+                1L,
+                101L,
+                61L,
+                "g-msg-1",
+                "c-1",
+                1L,
+                "TEXT",
+                null,
+                2,
+                new Date(),
+                new Date(),
+                1L
+        ));
+
+        DispatchPushService service = new DispatchPushService(channelUserManager, groupMessageQueryPort, groupService, new RedisStateProperties());
+        DispatchMessagePayload payload = new DispatchMessagePayload();
+        payload.setEventType(DispatchMessagePayload.EVENT_TYPE_MESSAGE);
+        payload.setGroupId(101L);
+        payload.setSeq(61L);
+        payload.setServerMsgId("g-msg-1");
+        payload.setFromUserId(1L);
+        payload.setMsgType("TEXT");
+        payload.setContent("hello");
 
         service.dispatchGroup(payload);
 

@@ -53,7 +53,7 @@ class RemoteMessageFacadeTest {
         when(messageServiceClient.persistSingleMessage(any()))
                 .thenReturn(ApiResponse.success(new PersistSingleMessageResponse("c-1", "srv-1", true)));
         when(messageServiceClient.ackMessageStatus(any()))
-                .thenReturn(ApiResponse.success(new AckMessageStatusResponse(message, "ACKED", 1, null)));
+                .thenReturn(ApiResponse.success(new AckMessageStatusResponse(message, "ACKED", 1, null, true)));
         when(messageServiceClient.pullOffline(any()))
                 .thenReturn(ApiResponse.success(new PullOfflineResponse(
                         new com.ming.imapicontract.message.CursorPageDTO(List.of(message), false, null, null))));
@@ -66,6 +66,7 @@ class RemoteMessageFacadeTest {
 
         assertEquals("srv-1", persistResult.serverMsgId());
         assertSame("ACKED", ackResult.status());
+        assertTrue(ackResult.statusNotifyAppended());
         assertEquals(1, pageResult.messages().size());
         assertEquals("srv-1", facade.recallMessage(1L, "srv-1", 120L).serverMsgId());
 
@@ -76,7 +77,7 @@ class RemoteMessageFacadeTest {
     }
 
     @Test
-    void enqueueStatusNotifyShouldReuseSuccessfulRemoteAckDispatch() {
+    void reportAckShouldExposeRemoteStatusNotifyAppendResult() {
         MessageServiceClient messageServiceClient = mock(MessageServiceClient.class);
         RemoteMessageFacade facade = new RemoteMessageFacade(
                 messageServiceClient,
@@ -89,18 +90,17 @@ class RemoteMessageFacadeTest {
                 new Date(), null, null, null, null);
 
         when(messageServiceClient.ackMessageStatus(any()))
-                .thenReturn(ApiResponse.success(new AckMessageStatusResponse(message, "ACKED", 1, null)));
+                .thenReturn(ApiResponse.success(new AckMessageStatusResponse(message, "ACKED", 1, null, true)));
 
         MessageFacade.AckReportResult ackResult = facade.reportAck(2L, "srv-ack", "ACKED");
 
         assertEquals("srv-ack", ackResult.message().serverMsgId());
-        assertTrue(facade.enqueueStatusNotify(ackResult.message(), ackResult.status()));
-        assertFalse(facade.enqueueStatusNotify(ackResult.message(), ackResult.status()));
+        assertTrue(ackResult.statusNotifyAppended());
         verify(messageServiceClient).ackMessageStatus(any());
     }
 
     @Test
-    void enqueueStatusNotifyShouldReturnFalseWithoutRemoteAckDispatchContext() {
+    void reportAckShouldExposeMissingRemoteStatusNotifyAppendResult() {
         MessageServiceClient messageServiceClient = mock(MessageServiceClient.class);
         RemoteMessageFacade facade = new RemoteMessageFacade(
                 messageServiceClient,
@@ -111,26 +111,12 @@ class RemoteMessageFacadeTest {
                 new RedisStateProperties());
         MessageDTO message = new MessageDTO(1L, "srv-ack", "c-ack", 1L, 2L, "TEXT", "hello", "ACKED",
                 new Date(), null, null, null, null);
-        MessageFacade.AckReportResult ackResult = new MessageFacade.AckReportResult(
-                new com.ming.imchatserver.application.model.SingleMessageView(
-                        message.id(),
-                        message.serverMsgId(),
-                        message.clientMsgId(),
-                        message.fromUserId(),
-                        message.toUserId(),
-                        message.msgType(),
-                        message.content(),
-                        message.status(),
-                        message.createdAt(),
-                        message.deliveredAt(),
-                        message.ackedAt(),
-                        message.retractedAt(),
-                        message.retractedBy()),
-                "ACKED",
-                1,
-                null);
+        when(messageServiceClient.ackMessageStatus(any()))
+                .thenReturn(ApiResponse.success(new AckMessageStatusResponse(message, "ACKED", 0, null, false)));
 
-        assertFalse(facade.enqueueStatusNotify(ackResult.message(), ackResult.status()));
+        MessageFacade.AckReportResult ackResult = facade.reportAck(2L, "srv-ack", "ACKED");
+
+        assertFalse(ackResult.statusNotifyAppended());
     }
 
     @Test
@@ -175,5 +161,37 @@ class RemoteMessageFacadeTest {
         verify(messageServiceClient).pullGroupOffline(any());
         verify(messageServiceClient).getGroupMessage(any());
         verify(messageServiceClient).recallGroupMessage(any());
+    }
+
+    @Test
+    void sendGroupChatShouldReleaseClientMsgIdWhenRemotePersistFails() {
+        MessageServiceClient messageServiceClient = mock(MessageServiceClient.class);
+        RemoteGroupService groupService = mock(RemoteGroupService.class);
+        IdempotencyService idempotencyService = mock(IdempotencyService.class);
+        RateLimitService rateLimitService = mock(RateLimitService.class);
+        RateLimitProperties rateLimitProperties = new RateLimitProperties();
+        RedisStateProperties redisStateProperties = new RedisStateProperties();
+        redisStateProperties.setClientMsgIdTtlSeconds(60);
+        RemoteMessageFacade facade = new RemoteMessageFacade(
+                messageServiceClient,
+                groupService,
+                idempotencyService,
+                rateLimitService,
+                rateLimitProperties,
+                redisStateProperties);
+
+        when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
+        when(idempotencyService.claimClientMessage(any(), any(), any())).thenReturn(true);
+        when(rateLimitService.checkAndIncrement(any(), any(), any(), anyLong(), anyLong()))
+                .thenReturn(new RateLimitService.Decision(true, 1, 60));
+        when(messageServiceClient.persistGroupMessage(any()))
+                .thenReturn(ApiResponse.failure("REMOTE_ERROR", "db down"));
+
+        org.junit.jupiter.api.Assertions.assertThrows(
+                com.ming.imchatserver.service.MessageRecallException.class,
+                () -> facade.sendGroupChat(101L, 1L, "cid-fail", "TEXT", "hello"));
+
+        verify(idempotencyService).claimClientMessage(any(), any(), any());
+        verify(idempotencyService).releaseClientMessage(1L, "cid-fail");
     }
 }

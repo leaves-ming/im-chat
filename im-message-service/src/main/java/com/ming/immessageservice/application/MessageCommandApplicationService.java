@@ -67,7 +67,12 @@ public class MessageCommandApplicationService {
                 request.reporterUserId(),
                 request.serverMsgId(),
                 request.targetStatus());
-        return new AckMessageStatusResponse(result.message(), result.status(), result.updated(), result.ackAt());
+        return new AckMessageStatusResponse(
+                result.message(),
+                result.status(),
+                result.updated(),
+                result.ackAt(),
+                result.statusNotifyAppended());
     }
 
     public PersistGroupMessageResponse persistGroupMessage(PersistGroupMessageRequest request) {

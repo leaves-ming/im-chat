@@ -7,8 +7,8 @@ import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imapicontract.message.MessageContentCodec;
 import com.ming.imchatserver.message.RecallProtocolSupport;
 import com.ming.imchatserver.netty.ChannelUserManager;
-import com.ming.imchatserver.service.remote.RemoteGroupMessageService;
 import com.ming.imchatserver.service.remote.RemoteGroupService;
+import com.ming.imchatserver.service.query.GroupMessageQueryPort;
 import io.netty.channel.Channel;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import org.slf4j.Logger;
@@ -40,18 +40,18 @@ public class DispatchPushService {
     private static final int GROUP_STATUS_RETRACTED = 2;
 
     private final ChannelUserManager channelUserManager;
-    private final RemoteGroupMessageService groupMessageService;
+    private final GroupMessageQueryPort groupMessageQueryPort;
     private final RemoteGroupService groupService;
     private final RedisStateProperties redisStateProperties;
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Autowired
     public DispatchPushService(ChannelUserManager channelUserManager,
-                               RemoteGroupMessageService groupMessageService,
+                               GroupMessageQueryPort groupMessageQueryPort,
                                RemoteGroupService groupService,
                                RedisStateProperties redisStateProperties) {
         this.channelUserManager = channelUserManager;
-        this.groupMessageService = groupMessageService;
+        this.groupMessageQueryPort = groupMessageQueryPort;
         this.groupService = groupService;
         this.redisStateProperties = redisStateProperties;
     }
@@ -170,7 +170,7 @@ public class DispatchPushService {
             return;
         }
 
-        GroupMessageView current = groupMessageService == null ? null : groupMessageService.findByServerMsgId(payload.getServerMsgId());
+        GroupMessageView current = groupMessageQueryPort == null ? null : groupMessageQueryPort.findByServerMsgId(payload.getServerMsgId());
         if (current != null && isRetracted(current)) {
             dispatchGroupRecall(buildGroupRecallPayload(current, payload.getOriginServerId()));
             return;

@@ -8,5 +8,6 @@ import java.util.Date;
 public record AckMessageStatusResponse(MessageDTO message,
                                        String status,
                                        int updated,
-                                       Date ackAt) {
+                                       Date ackAt,
+                                       boolean statusNotifyAppended) {
 }

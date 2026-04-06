@@ -22,8 +22,6 @@ public interface MessageFacade {
 
     AckReportResult reportAck(Long reporterUserId, String serverMsgId, String targetStatus);
 
-    boolean enqueueStatusNotify(SingleMessageView message, String status);
-
     SingleMessagePage pullOffline(Long userId, String deviceId, SingleSyncCursor syncCursor, int limit);
 
     SingleMessagePage loadInitialSync(Long userId, String deviceId, int limit);
@@ -45,6 +43,10 @@ public interface MessageFacade {
     record ChatPersistResult(String clientMsgId, String serverMsgId, boolean createdNew) {
     }
 
-    record AckReportResult(SingleMessageView message, String status, int updated, Date ackAt) {
+    record AckReportResult(SingleMessageView message,
+                           String status,
+                           int updated,
+                           Date ackAt,
+                           boolean statusNotifyAppended) {
     }
 }
