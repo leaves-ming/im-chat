@@ -43,6 +43,7 @@ import java.util.concurrent.Executor;
     private final HealthEndpoint healthEndpoint;
     private final InstanceProperties instanceProperties;
     private final Executor wsBusinessExecutor;
+    private final GroupPushDispatcher groupPushDispatcher;
     private final MessageFacade messageFacade;
     private final AuthFacade authFacadeFacade;
     /**
@@ -63,6 +64,7 @@ import java.util.concurrent.Executor;
                                   RuntimeObservabilitySettings runtimeObservabilitySettings,
                                   HealthEndpoint healthEndpoint,
                                   InstanceProperties instanceProperties,
+                                  GroupPushDispatcher groupPushDispatcher,
                                   MessageFacade messageFacade,
                                   AuthFacade authFacade,
                                   Executor wsBusinessExecutor) {
@@ -80,6 +82,7 @@ import java.util.concurrent.Executor;
         this.runtimeObservabilitySettings = runtimeObservabilitySettings;
         this.healthEndpoint = healthEndpoint;
         this.instanceProperties = instanceProperties;
+        this.groupPushDispatcher = groupPushDispatcher;
         this.messageFacade = messageFacade;
         this.authFacadeFacade = authFacade;
         this.wsBusinessExecutor = wsBusinessExecutor;
@@ -115,7 +118,7 @@ import java.util.concurrent.Executor;
         ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, null, socialFacade,
                 properties, metricsService, groupPushExecutor, groupPushCoordinator,
                 idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
-                messageFacade, authFacadeFacade,
+                groupPushDispatcher, messageFacade, authFacadeFacade,
                 wsBusinessExecutor));
         ch.pipeline().addLast(new IdleEventHandler(channelUserManager));
     }

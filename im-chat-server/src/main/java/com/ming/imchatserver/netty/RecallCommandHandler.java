@@ -2,7 +2,6 @@ package com.ming.imchatserver.netty;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ming.imchatserver.application.facade.MessageFacade;
-import com.ming.imchatserver.application.facade.SocialFacade;
 import com.ming.imchatserver.application.model.GroupMessageView;
 import com.ming.imchatserver.application.model.SingleMessageView;
 import com.ming.imchatserver.config.NettyProperties;
@@ -18,18 +17,18 @@ public class RecallCommandHandler implements WsCommandHandler {
     private static final int DEFAULT_MESSAGE_RECALL_WINDOW_SECONDS = 120;
 
     private final MessageFacade messageFacade;
-    private final SocialFacade socialFacade;
+    private final GroupPushDispatcher groupPushDispatcher;
     private final NettyProperties nettyProperties;
     private final WsProtocolSupport protocolSupport;
     private final ChannelUserManager channelUserManager;
 
     public RecallCommandHandler(MessageFacade messageFacade,
-                                SocialFacade socialFacade,
+                                GroupPushDispatcher groupPushDispatcher,
                                 NettyProperties nettyProperties,
                                 WsProtocolSupport protocolSupport,
                                 ChannelUserManager channelUserManager) {
         this.messageFacade = messageFacade;
-        this.socialFacade = socialFacade;
+        this.groupPushDispatcher = groupPushDispatcher;
         this.nettyProperties = nettyProperties;
         this.protocolSupport = protocolSupport;
         this.channelUserManager = channelUserManager;
@@ -64,7 +63,7 @@ public class RecallCommandHandler implements WsCommandHandler {
         GroupMessageView recalled = messageFacade.recallGroupMessage(userId, serverMsgId, recallWindowSeconds());
         ObjectNode result = RecallProtocolSupport.buildGroupRecallNode(protocolSupport.mapper(), "GROUP_MSG_RECALL_RESULT", recalled);
         protocolSupport.sendJson(context.channel(), result);
-        notifyGroupRecall(context.channel(), recalled);
+        groupPushDispatcher.notifyGroupRecall(context.channel(), recalled);
     }
 
     private void notifySingleRecallParticipants(Channel requester, SingleMessageView message) throws Exception {
@@ -81,19 +80,6 @@ public class RecallCommandHandler implements WsCommandHandler {
         }
         for (Channel channel : channelUserManager.getChannels(message.toUserId())) {
             channel.writeAndFlush(new TextWebSocketFrame(payload));
-        }
-    }
-
-    private void notifyGroupRecall(Channel requester, GroupMessageView message) throws Exception {
-        String payload = protocolSupport.mapper().writeValueAsString(
-                RecallProtocolSupport.buildGroupRecallNode(protocolSupport.mapper(), "GROUP_MSG_RECALL_NOTIFY", message));
-        for (Long userId : socialFacade.listActiveMemberUserIds(message.groupId())) {
-            for (Channel channel : channelUserManager.getChannels(userId)) {
-                if (channel == requester) {
-                    continue;
-                }
-                channel.writeAndFlush(new TextWebSocketFrame(payload));
-            }
         }
     }
 

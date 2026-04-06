@@ -4,10 +4,7 @@ import com.ming.imchatserver.application.model.ContactOperationResult;
 import com.ming.imchatserver.application.model.ContactPage;
 import com.ming.imchatserver.application.model.GroupJoinResult;
 import com.ming.imchatserver.application.model.GroupMemberPage;
-import com.ming.imchatserver.application.model.GroupMessageView;
 import com.ming.imchatserver.application.model.GroupQuitResult;
-
-import java.util.List;
 
 /**
  * 联系人与群组应用门面。
@@ -26,11 +23,7 @@ public interface SocialFacade {
 
     GroupMemberPage listMembers(Long groupId, Long cursorUserId, int limit);
 
-    void dispatchGroupPush(Long groupId, GroupMessageView message) throws Exception;
-
     boolean isSingleChatAllowed(Long fromUserId, Long toUserId);
 
     boolean isGroupMember(Long groupId, Long userId);
-
-    List<Long> listActiveMemberUserIds(Long groupId);
 }

@@ -56,6 +56,7 @@ public class NettyWebSocketServer {
     private final HealthEndpoint healthEndpoint;
     private final InstanceProperties instanceProperties;
     private final Executor wsBusinessExecutor;
+    private final GroupPushDispatcher groupPushDispatcher;
     private final MessageFacade messageFacade;
     private final AuthFacade authFacade;
 
@@ -85,6 +86,7 @@ public class NettyWebSocketServer {
                                 RuntimeObservabilitySettings runtimeObservabilitySettings,
                                 HealthEndpoint healthEndpoint,
                                 InstanceProperties instanceProperties,
+                                GroupPushDispatcher groupPushDispatcher,
                                 MessageFacade messageFacade,
                                 AuthFacade authFacade,
                                 @Qualifier("imWsBusinessExecutor") Executor wsBusinessExecutor) {
@@ -102,6 +104,7 @@ public class NettyWebSocketServer {
         this.runtimeObservabilitySettings = runtimeObservabilitySettings;
         this.healthEndpoint = healthEndpoint;
         this.instanceProperties = instanceProperties;
+        this.groupPushDispatcher = groupPushDispatcher;
         this.messageFacade = messageFacade;
         this.authFacade = authFacade;
         this.wsBusinessExecutor = wsBusinessExecutor;
@@ -125,6 +128,7 @@ public class NettyWebSocketServer {
                         groupPushExecutor, groupPushCoordinator,
                         idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
                         runtimeObservabilitySettings, healthEndpoint, instanceProperties,
+                        groupPushDispatcher,
                         messageFacade, authFacade,
                         wsBusinessExecutor));
         serverChannel = b.bind().sync().channel();

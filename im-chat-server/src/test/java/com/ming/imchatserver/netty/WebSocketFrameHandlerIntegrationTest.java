@@ -138,6 +138,9 @@ class WebSocketFrameHandlerIntegrationTest {
                                              Executor businessExecutor) {
         SocialFacade socialFacade = new SocialFacadeImpl(
                 contactService,
+                groupService
+        );
+        GroupPushDispatcher groupPushDispatcher = new NettyGroupPushDispatcher(
                 groupService,
                 channelUserManager,
                 groupPushExecutor,
@@ -157,6 +160,7 @@ class WebSocketFrameHandlerIntegrationTest {
                 rateLimitService,
                 rateLimitProperties,
                 redisStateProperties,
+                groupPushDispatcher,
                 bridgeMessageFacade(idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties),
                 bridgeAuthFacade(),
                 businessExecutor

@@ -21,15 +21,18 @@ public class GroupCommandHandler implements WsCommandHandler {
     private static final long INVALID_GROUP_CURSOR_SEQ = Long.MIN_VALUE;
 
     private final MessageFacade messageFacade;
+    private final GroupPushDispatcher groupPushDispatcher;
     private final SocialFacade socialFacade;
     private final NettyProperties nettyProperties;
     private final WsProtocolSupport protocolSupport;
 
     public GroupCommandHandler(MessageFacade messageFacade,
+                               GroupPushDispatcher groupPushDispatcher,
                                SocialFacade socialFacade,
                                NettyProperties nettyProperties,
                                WsProtocolSupport protocolSupport) {
         this.messageFacade = messageFacade;
+        this.groupPushDispatcher = groupPushDispatcher;
         this.socialFacade = socialFacade;
         this.nettyProperties = nettyProperties;
         this.protocolSupport = protocolSupport;
@@ -115,7 +118,7 @@ public class GroupCommandHandler implements WsCommandHandler {
         String clientMsgId = normalizeClientMsgId(context.payload().path("clientMsgId").asText(null));
         GroupMessagePersistResult persistResult = messageFacade.sendGroupChat(groupId, fromUserId, clientMsgId, msgType, content);
         GroupMessageView message = persistResult.message();
-        socialFacade.dispatchGroupPush(groupId, message);
+        groupPushDispatcher.dispatchGroupPush(groupId, message);
     }
 
     private void handleGroupPullOffline(WsCommandContext context) throws Exception {

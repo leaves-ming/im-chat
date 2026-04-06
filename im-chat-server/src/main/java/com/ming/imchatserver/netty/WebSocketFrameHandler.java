@@ -61,7 +61,7 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
                                  NettyProperties nettyProperties,
                                  MetricsService metricsService) {
         this(channelUserManager, messageService, socialFacade,
-                nettyProperties, metricsService, null, null, null, null, null, null, null, null, null);
+                nettyProperties, metricsService, null, null, null, null, null, null, null, null, null, null);
     }
 
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
@@ -71,7 +71,7 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
                                  MetricsService metricsService,
                                  Executor groupPushExecutor) {
         this(channelUserManager, messageService, socialFacade,
-                nettyProperties, metricsService, groupPushExecutor, null, null, null, null, null, null, null, null);
+                nettyProperties, metricsService, groupPushExecutor, null, null, null, null, null, null, null, null, null);
     }
 
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
@@ -83,7 +83,7 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
                                  GroupPushCoordinator groupPushCoordinator) {
         this(channelUserManager, messageService, socialFacade,
                 nettyProperties, metricsService, groupPushExecutor, groupPushCoordinator,
-                null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null);
     }
 
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
@@ -100,7 +100,7 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
         this(channelUserManager, messageService, socialFacade,
                 nettyProperties, metricsService, groupPushExecutor, groupPushCoordinator,
                 idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
-                null, null, null);
+                null, null, null, null);
     }
 
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
@@ -118,7 +118,7 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
         this(channelUserManager, messageService, socialFacade,
                 nettyProperties, metricsService, groupPushExecutor, groupPushCoordinator,
                 idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
-                null, null, businessExecutor);
+                null, null, null, businessExecutor);
     }
 
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
@@ -132,6 +132,7 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
                                  RateLimitService rateLimitService,
                                  RateLimitProperties rateLimitProperties,
                                  RedisStateProperties redisStateProperties,
+                                 GroupPushDispatcher injectedGroupPushDispatcher,
                                  MessageFacade injectedMessageFacade,
                                  AuthFacade injectedAuthFacade,
                                  Executor businessExecutor) {
@@ -140,14 +141,15 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
         this.businessExecutor = businessExecutor == null ? Runnable::run : businessExecutor;
         ObjectMapper mapper = new ObjectMapper();
         this.protocolSupport = new WsProtocolSupport(mapper);
+        GroupPushDispatcher groupPushDispatcher = Objects.requireNonNull(injectedGroupPushDispatcher, "groupPushDispatcher unavailable");
         this.messageFacade = Objects.requireNonNull(injectedMessageFacade, "messageFacade unavailable");
         SocialFacade socialFacade = Objects.requireNonNull(injectedSocialFacade, "socialFacade unavailable");
         this.authFacade = Objects.requireNonNull(injectedAuthFacade, "authFacade unavailable");
         this.commandRouter = new WsCommandRouter(
                 new ChatCommandHandler(this.messageFacade, socialFacade, nettyProperties, protocolSupport, channelUserManager),
-                new GroupCommandHandler(this.messageFacade, socialFacade, nettyProperties, protocolSupport),
+                new GroupCommandHandler(this.messageFacade, groupPushDispatcher, socialFacade, nettyProperties, protocolSupport),
                 new ContactCommandHandler(socialFacade, nettyProperties, protocolSupport),
-                new RecallCommandHandler(this.messageFacade, socialFacade, nettyProperties, protocolSupport, channelUserManager)
+                new RecallCommandHandler(this.messageFacade, groupPushDispatcher, nettyProperties, protocolSupport, channelUserManager)
         );
     }
 
@@ -156,7 +158,7 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
                                  NettyProperties nettyProperties,
                                  MetricsService metricsService) {
         this(channelUserManager, messageService, null, nettyProperties, metricsService,
-                null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null);
     }
 
     @Override
