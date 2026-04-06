@@ -1,6 +1,6 @@
 package com.ming.imfileservice.remote.message;
 
-import com.ming.im.apicontract.common.ApiResponse;
+import com.ming.imapicontract.common.ApiResponse;
 import com.ming.imapicontract.message.CheckFileAccessRequest;
 import com.ming.imapicontract.message.CheckFileAccessResponse;
 import com.ming.imapicontract.message.MessageApiPaths;

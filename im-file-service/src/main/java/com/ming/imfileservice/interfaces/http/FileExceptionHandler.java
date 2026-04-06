@@ -1,6 +1,6 @@
 package com.ming.imfileservice.interfaces.http;
 
-import com.ming.im.apicontract.common.ApiResponse;
+import com.ming.imapicontract.common.ApiResponse;
 import com.ming.imfileservice.file.FileAccessDeniedException;
 import com.ming.imfileservice.file.FileNotFoundBizException;
 import com.ming.imfileservice.service.FileTokenBizException;

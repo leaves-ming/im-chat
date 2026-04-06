@@ -1,4 +1,4 @@
-package com.ming.im.apicontract.common;
+package com.ming.imapicontract.common;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 

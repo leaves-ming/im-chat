@@ -2,7 +2,7 @@ package com.ming.imfileservice.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.ming.im.apicontract.common.ApiResponse;
+import com.ming.imapicontract.common.ApiResponse;
 import com.ming.imapicontract.message.CheckFileAccessRequest;
 import com.ming.imapicontract.message.CheckFileAccessResponse;
 import com.ming.imfileservice.config.FileStorageProperties;

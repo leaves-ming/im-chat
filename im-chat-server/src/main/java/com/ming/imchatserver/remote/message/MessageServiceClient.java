@@ -1,6 +1,6 @@
 package com.ming.imchatserver.remote.message;
 
-import com.ming.im.apicontract.common.ApiResponse;
+import com.ming.imapicontract.common.ApiResponse;
 import com.ming.imapicontract.message.AckMessageStatusRequest;
 import com.ming.imapicontract.message.AckMessageStatusResponse;
 import com.ming.imapicontract.message.AdvanceCursorRequest;

@@ -1,6 +1,6 @@
 package com.ming.immessageservice.application;
 
-import com.ming.im.apicontract.common.ApiResponse;
+import com.ming.imapicontract.common.ApiResponse;
 import com.ming.imapicontract.file.ConsumeUploadTokenResponse;
 import com.ming.imapicontract.message.PersistGroupMessageRequest;
 import com.ming.imapicontract.message.PersistGroupMessageResponse;

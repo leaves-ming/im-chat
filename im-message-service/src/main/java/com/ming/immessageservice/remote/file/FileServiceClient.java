@@ -1,6 +1,6 @@
 package com.ming.immessageservice.remote.file;
 
-import com.ming.im.apicontract.common.ApiResponse;
+import com.ming.imapicontract.common.ApiResponse;
 import com.ming.imapicontract.file.ConsumeUploadTokenRequest;
 import com.ming.imapicontract.file.ConsumeUploadTokenResponse;
 import com.ming.imapicontract.file.FileApiPaths;

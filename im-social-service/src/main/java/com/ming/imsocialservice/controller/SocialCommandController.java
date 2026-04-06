@@ -1,6 +1,6 @@
 package com.ming.imsocialservice.controller;
 
-import com.ming.im.apicontract.common.ApiResponse;
+import com.ming.imapicontract.common.ApiResponse;
 import com.ming.imapicontract.social.CheckContactActiveRequest;
 import com.ming.imapicontract.social.CheckContactActiveResponse;
 import com.ming.imapicontract.social.CheckGroupRecallPermissionRequest;

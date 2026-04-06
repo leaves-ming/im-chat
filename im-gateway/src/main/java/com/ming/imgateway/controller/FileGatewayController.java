@@ -2,7 +2,7 @@ package com.ming.imgateway.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.ming.im.apicontract.common.ApiResponse;
+import com.ming.imapicontract.common.ApiResponse;
 import com.ming.imapicontract.file.CreateDownloadUrlRequest;
 import com.ming.imapicontract.file.CreateDownloadUrlResponse;
 import com.ming.imapicontract.file.StoreFileRequest;

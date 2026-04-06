@@ -1,6 +1,6 @@
 package com.ming.imfileservice.service;
 
-import com.ming.im.apicontract.common.ApiResponse;
+import com.ming.imapicontract.common.ApiResponse;
 import com.ming.imapicontract.message.CheckFileAccessResponse;
 import com.ming.imfileservice.config.FileStorageProperties;
 import com.ming.imfileservice.dao.FileRecordDO;

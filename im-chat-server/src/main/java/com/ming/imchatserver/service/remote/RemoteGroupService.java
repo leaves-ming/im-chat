@@ -1,6 +1,6 @@
 package com.ming.imchatserver.service.remote;
 
-import com.ming.im.apicontract.common.ApiResponse;
+import com.ming.imapicontract.common.ApiResponse;
 import com.ming.imapicontract.social.CheckGroupRecallPermissionRequest;
 import com.ming.imapicontract.social.CheckGroupRecallPermissionResponse;
 import com.ming.imapicontract.social.GetGroupMemberIdsRequest;

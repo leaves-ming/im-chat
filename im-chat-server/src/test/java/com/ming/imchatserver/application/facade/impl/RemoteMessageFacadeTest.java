@@ -1,6 +1,6 @@
 package com.ming.imchatserver.application.facade.impl;
 
-import com.ming.im.apicontract.common.ApiResponse;
+import com.ming.imapicontract.common.ApiResponse;
 import com.ming.imapicontract.message.AckMessageStatusResponse;
 import com.ming.imapicontract.message.GetGroupMessageResponse;
 import com.ming.imapicontract.message.GroupMessageDTO;

@@ -1,6 +1,6 @@
 package com.ming.imchatserver.remote.file;
 
-import com.ming.im.apicontract.common.ApiResponse;
+import com.ming.imapicontract.common.ApiResponse;
 import com.ming.imapicontract.file.CreateDownloadUrlRequest;
 import com.ming.imapicontract.file.CreateDownloadUrlResponse;
 import com.ming.imapicontract.file.FileApiPaths;

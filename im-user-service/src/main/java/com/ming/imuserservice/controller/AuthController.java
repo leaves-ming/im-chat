@@ -1,6 +1,6 @@
 package com.ming.imuserservice.controller;
 
-import com.ming.im.apicontract.common.ApiResponse;
+import com.ming.imapicontract.common.ApiResponse;
 import com.ming.imapicontract.user.LoginRequest;
 import com.ming.imapicontract.user.LoginResponse;
 import com.ming.imapicontract.user.UserApiPaths;

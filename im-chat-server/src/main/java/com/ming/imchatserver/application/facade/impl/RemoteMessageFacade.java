@@ -1,7 +1,7 @@
 package com.ming.imchatserver.application.facade.impl;
 
 import com.alibaba.csp.sentinel.annotation.SentinelResource;
-import com.ming.im.apicontract.common.ApiResponse;
+import com.ming.imapicontract.common.ApiResponse;
 import com.ming.imapicontract.message.AckMessageStatusRequest;
 import com.ming.imapicontract.message.AckMessageStatusResponse;
 import com.ming.imapicontract.message.AdvanceCursorRequest;

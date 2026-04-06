@@ -1,6 +1,6 @@
 package com.ming.imchatserver.service.impl;
 
-import com.ming.im.apicontract.common.ApiResponse;
+import com.ming.imapicontract.common.ApiResponse;
 import com.ming.imapicontract.user.IntrospectTokenRequest;
 import com.ming.imapicontract.user.IntrospectTokenResponse;
 import com.ming.imapicontract.user.LoginRequest;

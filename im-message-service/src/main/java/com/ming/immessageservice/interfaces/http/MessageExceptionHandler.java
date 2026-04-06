@@ -1,6 +1,6 @@
 package com.ming.immessageservice.interfaces.http;
 
-import com.ming.im.apicontract.common.ApiResponse;
+import com.ming.imapicontract.common.ApiResponse;
 import com.ming.immessageservice.domain.exception.MessageRpcException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
