@@ -26,8 +26,11 @@ import java.util.Date;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -73,6 +76,64 @@ class RemoteMessageFacadeTest {
     }
 
     @Test
+    void enqueueStatusNotifyShouldReuseSuccessfulRemoteAckDispatch() {
+        MessageServiceClient messageServiceClient = mock(MessageServiceClient.class);
+        RemoteMessageFacade facade = new RemoteMessageFacade(
+                messageServiceClient,
+                mock(RemoteGroupService.class),
+                mock(IdempotencyService.class),
+                mock(RateLimitService.class),
+                new RateLimitProperties(),
+                new RedisStateProperties());
+        MessageDTO message = new MessageDTO(1L, "srv-ack", "c-ack", 1L, 2L, "TEXT", "hello", "ACKED",
+                new Date(), null, null, null, null);
+
+        when(messageServiceClient.ackMessageStatus(any()))
+                .thenReturn(ApiResponse.success(new AckMessageStatusResponse(message, "ACKED", 1, null)));
+
+        MessageFacade.AckReportResult ackResult = facade.reportAck(2L, "srv-ack", "ACKED");
+
+        assertEquals("srv-ack", ackResult.message().serverMsgId());
+        assertTrue(facade.enqueueStatusNotify(ackResult.message(), ackResult.status()));
+        assertFalse(facade.enqueueStatusNotify(ackResult.message(), ackResult.status()));
+        verify(messageServiceClient).ackMessageStatus(any());
+    }
+
+    @Test
+    void enqueueStatusNotifyShouldReturnFalseWithoutRemoteAckDispatchContext() {
+        MessageServiceClient messageServiceClient = mock(MessageServiceClient.class);
+        RemoteMessageFacade facade = new RemoteMessageFacade(
+                messageServiceClient,
+                mock(RemoteGroupService.class),
+                mock(IdempotencyService.class),
+                mock(RateLimitService.class),
+                new RateLimitProperties(),
+                new RedisStateProperties());
+        MessageDTO message = new MessageDTO(1L, "srv-ack", "c-ack", 1L, 2L, "TEXT", "hello", "ACKED",
+                new Date(), null, null, null, null);
+        MessageFacade.AckReportResult ackResult = new MessageFacade.AckReportResult(
+                new com.ming.imchatserver.application.model.SingleMessageView(
+                        message.id(),
+                        message.serverMsgId(),
+                        message.clientMsgId(),
+                        message.fromUserId(),
+                        message.toUserId(),
+                        message.msgType(),
+                        message.content(),
+                        message.status(),
+                        message.createdAt(),
+                        message.deliveredAt(),
+                        message.ackedAt(),
+                        message.retractedAt(),
+                        message.retractedBy()),
+                "ACKED",
+                1,
+                null);
+
+        assertFalse(facade.enqueueStatusNotify(ackResult.message(), ackResult.status()));
+    }
+
+    @Test
     void shouldCallMessageServiceClientForGroupOperations() {
         MessageServiceClient messageServiceClient = mock(MessageServiceClient.class);
         RemoteGroupService groupService = mock(RemoteGroupService.class);
@@ -92,7 +153,7 @@ class RemoteMessageFacadeTest {
 
         when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
         when(idempotencyService.claimClientMessage(any(), any(), any())).thenReturn(true);
-        when(rateLimitService.checkAndIncrement(any(), any(), any(), any(), any()))
+        when(rateLimitService.checkAndIncrement(any(), any(), any(), anyLong(), anyLong()))
                 .thenReturn(new RateLimitService.Decision(true, 1, 60));
         when(messageServiceClient.persistGroupMessage(any()))
                 .thenReturn(ApiResponse.success(new PersistGroupMessageResponse(message)));

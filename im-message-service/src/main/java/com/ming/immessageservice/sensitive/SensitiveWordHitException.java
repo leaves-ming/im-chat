@@ -1,4 +1,4 @@
-package com.ming.imchatserver.sensitive;
+package com.ming.immessageservice.sensitive;
 
 /**
  * 敏感词命中业务异常。

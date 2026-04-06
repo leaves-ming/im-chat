@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ming.imchatserver.application.model.GroupMessageView;
 import com.ming.imchatserver.config.RedisStateProperties;
-import com.ming.imchatserver.message.MessageContentCodec;
+import com.ming.imapicontract.message.MessageContentCodec;
 import com.ming.imchatserver.message.RecallProtocolSupport;
 import com.ming.imchatserver.netty.ChannelUserManager;
 import com.ming.imchatserver.service.remote.RemoteGroupMessageService;

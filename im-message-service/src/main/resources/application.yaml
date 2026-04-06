@@ -104,6 +104,11 @@ im:
     protocol: http
   message-service:
     offline-pull-max-limit: ${IM_MESSAGE_SERVICE_OFFLINE_PULL_MAX_LIMIT:200}
+  sensitive:
+    enabled: false
+    mode: REJECT
+    word-source: classpath:sensitive_words.txt
+    fail-open: true
   reliability:
     relay-batch-size: 100
     relay-fixed-delay-ms: 1000

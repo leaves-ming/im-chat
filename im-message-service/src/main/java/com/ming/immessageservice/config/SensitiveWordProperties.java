@@ -1,4 +1,4 @@
-package com.ming.imchatserver.config;
+package com.ming.immessageservice.config;
 
 import lombok.Getter;
 import lombok.Setter;

@@ -1,4 +1,4 @@
-package com.ming.imchatserver.sensitive;
+package com.ming.immessageservice.sensitive;
 
 import java.util.HashMap;
 import java.util.List;
@@ -20,14 +20,6 @@ public class SensitiveWordEngine {
         for (String word : words) {
             insert(word);
         }
-    }
-
-    public boolean contains(String text) {
-        return filter(text).isHit();
-    }
-
-    public String replace(String text) {
-        return filter(text).getOutputText();
     }
 
     public EngineResult filter(String text) {

@@ -9,7 +9,7 @@ import com.ming.imchatserver.application.model.GroupMessagePage;
 import com.ming.imchatserver.application.model.GroupMessagePersistResult;
 import com.ming.imchatserver.application.model.GroupMessageView;
 import com.ming.imchatserver.config.NettyProperties;
-import com.ming.imchatserver.message.MessageContentCodec;
+import com.ming.imapicontract.message.MessageContentCodec;
 
 /**
  * 群组命令处理器。

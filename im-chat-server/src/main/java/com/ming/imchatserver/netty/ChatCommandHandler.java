@@ -9,7 +9,7 @@ import com.ming.imchatserver.application.model.SingleMessagePage;
 import com.ming.imchatserver.application.model.SingleMessageView;
 import com.ming.imchatserver.application.model.SingleSyncCursor;
 import com.ming.imchatserver.config.NettyProperties;
-import com.ming.imchatserver.message.MessageContentCodec;
+import com.ming.imapicontract.message.MessageContentCodec;
 import io.netty.channel.Channel;
 
 import java.time.Instant;

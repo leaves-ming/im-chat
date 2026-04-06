@@ -4,26 +4,17 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.ming.imchatserver.application.facade.AuthFacade;
 import com.ming.imchatserver.application.facade.MessageFacade;
 import com.ming.imchatserver.application.facade.SocialFacade;
 import com.ming.imchatserver.application.model.SingleMessagePage;
 import com.ming.imchatserver.application.model.SingleMessageView;
 import com.ming.imchatserver.config.NettyProperties;
-import com.ming.imchatserver.config.RateLimitProperties;
-import com.ming.imchatserver.config.RedisStateProperties;
-import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.observability.TraceContextSupport;
 import com.ming.imchatserver.service.FileTokenBizException;
 import com.ming.imchatserver.service.GroupBizException;
-import com.ming.imchatserver.service.IdempotencyService;
 import com.ming.imchatserver.service.MessageRecallException;
-import com.ming.imchatserver.service.MessageService;
-import com.ming.imchatserver.service.RateLimitService;
 import com.ming.imchatserver.service.SocialRpcException;
 import com.ming.imchatserver.file.FileAccessDeniedException;
-import com.ming.imchatserver.sensitive.SensitiveWordHitException;
-import com.ming.imchatserver.sensitive.SensitiveWordUnavailableException;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
@@ -52,113 +43,28 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
     private final Executor businessExecutor;
     private final WsProtocolSupport protocolSupport;
     private final WsCommandRouter commandRouter;
-    private final AuthFacade authFacade;
     private final MessageFacade messageFacade;
 
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
-                                 MessageService messageService,
                                  SocialFacade socialFacade,
                                  NettyProperties nettyProperties,
-                                 MetricsService metricsService) {
-        this(channelUserManager, messageService, socialFacade,
-                nettyProperties, metricsService, null, null, null, null, null, null, null, null, null, null);
-    }
-
-    public WebSocketFrameHandler(ChannelUserManager channelUserManager,
-                                 MessageService messageService,
-                                 SocialFacade socialFacade,
-                                 NettyProperties nettyProperties,
-                                 MetricsService metricsService,
-                                 Executor groupPushExecutor) {
-        this(channelUserManager, messageService, socialFacade,
-                nettyProperties, metricsService, groupPushExecutor, null, null, null, null, null, null, null, null, null);
-    }
-
-    public WebSocketFrameHandler(ChannelUserManager channelUserManager,
-                                 MessageService messageService,
-                                 SocialFacade socialFacade,
-                                 NettyProperties nettyProperties,
-                                 MetricsService metricsService,
-                                 Executor groupPushExecutor,
-                                 GroupPushCoordinator groupPushCoordinator) {
-        this(channelUserManager, messageService, socialFacade,
-                nettyProperties, metricsService, groupPushExecutor, groupPushCoordinator,
-                null, null, null, null, null, null, null, null);
-    }
-
-    public WebSocketFrameHandler(ChannelUserManager channelUserManager,
-                                 MessageService messageService,
-                                 SocialFacade socialFacade,
-                                 NettyProperties nettyProperties,
-                                 MetricsService metricsService,
-                                 Executor groupPushExecutor,
-                                 GroupPushCoordinator groupPushCoordinator,
-                                 IdempotencyService idempotencyService,
-                                 RateLimitService rateLimitService,
-                                 RateLimitProperties rateLimitProperties,
-                                 RedisStateProperties redisStateProperties) {
-        this(channelUserManager, messageService, socialFacade,
-                nettyProperties, metricsService, groupPushExecutor, groupPushCoordinator,
-                idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
-                null, null, null, null);
-    }
-
-    public WebSocketFrameHandler(ChannelUserManager channelUserManager,
-                                 MessageService messageService,
-                                 SocialFacade socialFacade,
-                                 NettyProperties nettyProperties,
-                                 MetricsService metricsService,
-                                 Executor groupPushExecutor,
-                                 GroupPushCoordinator groupPushCoordinator,
-                                 IdempotencyService idempotencyService,
-                                 RateLimitService rateLimitService,
-                                 RateLimitProperties rateLimitProperties,
-                                 RedisStateProperties redisStateProperties,
-                                 Executor businessExecutor) {
-        this(channelUserManager, messageService, socialFacade,
-                nettyProperties, metricsService, groupPushExecutor, groupPushCoordinator,
-                idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
-                null, null, null, businessExecutor);
-    }
-
-    public WebSocketFrameHandler(ChannelUserManager channelUserManager,
-                                 MessageService messageService,
-                                 SocialFacade injectedSocialFacade,
-                                 NettyProperties nettyProperties,
-                                 MetricsService metricsService,
-                                 Executor groupPushExecutor,
-                                 GroupPushCoordinator groupPushCoordinator,
-                                 IdempotencyService idempotencyService,
-                                 RateLimitService rateLimitService,
-                                 RateLimitProperties rateLimitProperties,
-                                 RedisStateProperties redisStateProperties,
-                                 GroupPushDispatcher injectedGroupPushDispatcher,
-                                 MessageFacade injectedMessageFacade,
-                                 AuthFacade injectedAuthFacade,
+                                 GroupPushDispatcher groupPushDispatcher,
+                                 MessageFacade messageFacade,
                                  Executor businessExecutor) {
         this.channelUserManager = channelUserManager;
         this.nettyProperties = nettyProperties;
         this.businessExecutor = businessExecutor == null ? Runnable::run : businessExecutor;
         ObjectMapper mapper = new ObjectMapper();
         this.protocolSupport = new WsProtocolSupport(mapper);
-        GroupPushDispatcher groupPushDispatcher = Objects.requireNonNull(injectedGroupPushDispatcher, "groupPushDispatcher unavailable");
-        this.messageFacade = Objects.requireNonNull(injectedMessageFacade, "messageFacade unavailable");
-        SocialFacade socialFacade = Objects.requireNonNull(injectedSocialFacade, "socialFacade unavailable");
-        this.authFacade = Objects.requireNonNull(injectedAuthFacade, "authFacade unavailable");
+        GroupPushDispatcher requiredGroupPushDispatcher = Objects.requireNonNull(groupPushDispatcher, "groupPushDispatcher unavailable");
+        this.messageFacade = Objects.requireNonNull(messageFacade, "messageFacade unavailable");
+        SocialFacade requiredSocialFacade = Objects.requireNonNull(socialFacade, "socialFacade unavailable");
         this.commandRouter = new WsCommandRouter(
-                new ChatCommandHandler(this.messageFacade, socialFacade, nettyProperties, protocolSupport, channelUserManager),
-                new GroupCommandHandler(this.messageFacade, groupPushDispatcher, socialFacade, nettyProperties, protocolSupport),
-                new ContactCommandHandler(socialFacade, nettyProperties, protocolSupport),
-                new RecallCommandHandler(this.messageFacade, groupPushDispatcher, nettyProperties, protocolSupport, channelUserManager)
+                new ChatCommandHandler(this.messageFacade, requiredSocialFacade, nettyProperties, protocolSupport, channelUserManager),
+                new GroupCommandHandler(this.messageFacade, requiredGroupPushDispatcher, requiredSocialFacade, nettyProperties, protocolSupport),
+                new ContactCommandHandler(requiredSocialFacade, nettyProperties, protocolSupport),
+                new RecallCommandHandler(this.messageFacade, requiredGroupPushDispatcher, nettyProperties, protocolSupport, channelUserManager)
         );
-    }
-
-    public WebSocketFrameHandler(ChannelUserManager channelUserManager,
-                                 MessageService messageService,
-                                 NettyProperties nettyProperties,
-                                 MetricsService metricsService) {
-        this(channelUserManager, messageService, null, nettyProperties, metricsService,
-                null, null, null, null, null, null, null, null, null, null);
     }
 
     @Override
@@ -255,10 +161,6 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
                 } else {
                     protocolSupport.sendError(ctx.channel(), finalTraceId, "INVALID_PARAM", ex.getMessage());
                 }
-            } catch (SensitiveWordHitException ex) {
-                protocolSupport.sendError(ctx.channel(), finalTraceId, ex.getCode(), ex.getMessage());
-            } catch (SensitiveWordUnavailableException ex) {
-                protocolSupport.sendError(ctx.channel(), finalTraceId, ex.getCode(), ex.getMessage());
             } catch (SocialRpcException ex) {
                 protocolSupport.sendError(ctx.channel(), finalTraceId, ex.getCode(), ex.getMessage());
             } catch (Exception ex) {
@@ -278,7 +180,7 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
 
         String deviceId = protocolSupport.currentDeviceId(ctx.channel());
         int batchSize = nettyProperties.getSyncBatchSize();
-        SingleMessagePage pageResult = authFacade.loadInitialSync(userId, deviceId, batchSize);
+        SingleMessagePage pageResult = messageFacade.loadInitialSync(userId, deviceId, batchSize);
         ObjectNode batchNode = protocolSupport.mapper().createObjectNode();
         batchNode.put("type", "SYNC_BATCH");
         ArrayNode messages = protocolSupport.mapper().createArrayNode();

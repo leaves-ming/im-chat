@@ -7,7 +7,7 @@ import com.ming.imchatserver.application.model.ContactView;
 import com.ming.imchatserver.application.model.GroupMemberView;
 import com.ming.imchatserver.application.model.GroupMessageView;
 import com.ming.imchatserver.application.model.SingleMessageView;
-import com.ming.imchatserver.message.MessageContentCodec;
+import com.ming.imapicontract.message.MessageContentCodec;
 import io.netty.channel.Channel;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 

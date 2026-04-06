@@ -1,9 +1,9 @@
 package com.ming.imchatserver.netty;
 
+import com.ming.imapicontract.message.MessageContentCodec;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.ming.imchatserver.application.facade.AuthFacade;
 import com.ming.imchatserver.application.facade.MessageFacade;
 import com.ming.imchatserver.application.facade.SocialFacade;
 import com.ming.imchatserver.application.model.ContactOperationResult;
@@ -24,12 +24,11 @@ import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.config.RateLimitProperties;
 import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imchatserver.dao.MessageDO;
-import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.service.RateLimitService;
-import com.ming.imchatserver.sensitive.SensitiveWordHitException;
 import com.ming.imchatserver.service.FileTokenBizException;
 import com.ming.imchatserver.service.IdempotencyService;
+import com.ming.imchatserver.service.MessageRecallException;
 import com.ming.imchatserver.service.MessageService;
 import com.ming.imchatserver.service.remote.RemoteContactService;
 import com.ming.imchatserver.service.remote.RemoteGroupMessageService;
@@ -104,67 +103,86 @@ class WebSocketFrameHandlerIntegrationTest {
     }
 
     private WebSocketFrameHandler newHandler(MetricsService metricsService) {
-        return newHandler(metricsService, null, null, null, null, null, null, null);
+        return newHandlerFixture(metricsService).create();
     }
 
-    private WebSocketFrameHandler newHandler(MetricsService metricsService, Executor groupPushExecutor) {
-        return newHandler(metricsService, groupPushExecutor, null, null, null, null, null, null);
+    private WebSocketFrameHandler createHandler(HandlerFixture fixture) {
+        return fixture.create();
     }
 
-    private WebSocketFrameHandler newHandler(MetricsService metricsService,
-                                             Executor groupPushExecutor,
-                                             GroupPushCoordinator groupPushCoordinator) {
-        return newHandler(metricsService, groupPushExecutor, groupPushCoordinator, null, null, null, null, null);
+    private HandlerFixture newHandlerFixture(MetricsService metricsService) {
+        return new HandlerFixture(metricsService);
     }
 
-    private WebSocketFrameHandler newHandler(MetricsService metricsService,
-                                             Executor groupPushExecutor,
-                                             GroupPushCoordinator groupPushCoordinator,
-                                             IdempotencyService idempotencyService,
-                                             RateLimitService rateLimitService,
-                                             RateLimitProperties rateLimitProperties,
-                                             RedisStateProperties redisStateProperties) {
-        return newHandler(metricsService, groupPushExecutor, groupPushCoordinator, idempotencyService,
-                rateLimitService, rateLimitProperties, redisStateProperties, null);
-    }
+    private final class HandlerFixture {
 
-    private WebSocketFrameHandler newHandler(MetricsService metricsService,
-                                             Executor groupPushExecutor,
-                                             GroupPushCoordinator groupPushCoordinator,
-                                             IdempotencyService idempotencyService,
-                                             RateLimitService rateLimitService,
-                                             RateLimitProperties rateLimitProperties,
-                                             RedisStateProperties redisStateProperties,
-                                             Executor businessExecutor) {
-        SocialFacade socialFacade = new SocialFacadeImpl(
-                contactService,
-                groupService
-        );
-        GroupPushDispatcher groupPushDispatcher = new NettyGroupPushDispatcher(
-                groupService,
-                channelUserManager,
-                groupPushExecutor,
-                groupPushCoordinator,
-                metricsService,
-                nettyProperties
-        );
-        return new WebSocketFrameHandler(
-                channelUserManager,
-                messageService,
-                socialFacade,
-                nettyProperties,
-                metricsService,
-                groupPushExecutor,
-                groupPushCoordinator,
-                idempotencyService,
-                rateLimitService,
-                rateLimitProperties,
-                redisStateProperties,
-                groupPushDispatcher,
-                bridgeMessageFacade(idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties),
-                bridgeAuthFacade(),
-                businessExecutor
-        );
+        private final MetricsService metricsService;
+        private Executor groupPushExecutor;
+        private GroupPushCoordinator groupPushCoordinator;
+        private IdempotencyService idempotencyService;
+        private RateLimitService rateLimitService;
+        private RateLimitProperties rateLimitProperties;
+        private RedisStateProperties redisStateProperties;
+        private Executor businessExecutor;
+
+        private HandlerFixture(MetricsService metricsService) {
+            this.metricsService = metricsService;
+        }
+
+        private HandlerFixture groupPushExecutor(Executor groupPushExecutor) {
+            this.groupPushExecutor = groupPushExecutor;
+            return this;
+        }
+
+        private HandlerFixture groupPushCoordinator(GroupPushCoordinator groupPushCoordinator) {
+            this.groupPushCoordinator = groupPushCoordinator;
+            return this;
+        }
+
+        private HandlerFixture idempotencyService(IdempotencyService idempotencyService) {
+            this.idempotencyService = idempotencyService;
+            return this;
+        }
+
+        private HandlerFixture rateLimitService(RateLimitService rateLimitService) {
+            this.rateLimitService = rateLimitService;
+            return this;
+        }
+
+        private HandlerFixture rateLimitProperties(RateLimitProperties rateLimitProperties) {
+            this.rateLimitProperties = rateLimitProperties;
+            return this;
+        }
+
+        private HandlerFixture redisStateProperties(RedisStateProperties redisStateProperties) {
+            this.redisStateProperties = redisStateProperties;
+            return this;
+        }
+
+        private HandlerFixture businessExecutor(Executor businessExecutor) {
+            this.businessExecutor = businessExecutor;
+            return this;
+        }
+
+        private WebSocketFrameHandler create() {
+            SocialFacade socialFacade = new SocialFacadeImpl(contactService, groupService);
+            GroupPushDispatcher groupPushDispatcher = new NettyGroupPushDispatcher(
+                    groupService,
+                    channelUserManager,
+                    groupPushExecutor,
+                    groupPushCoordinator,
+                    metricsService,
+                    nettyProperties
+            );
+            return new WebSocketFrameHandler(
+                    channelUserManager,
+                    socialFacade,
+                    nettyProperties,
+                    groupPushDispatcher,
+                    bridgeMessageFacade(idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties),
+                    businessExecutor
+            );
+        }
     }
 
     private MessageFacade bridgeMessageFacade(IdempotencyService idempotencyService,
@@ -267,10 +285,6 @@ class WebSocketFrameHandlerIntegrationTest {
                 return groupMessageService.recallMessage(operatorUserId, serverMsgId, recallWindowSeconds);
             }
         };
-    }
-
-    private AuthFacade bridgeAuthFacade() {
-        return (userId, deviceId, limit) -> toSingleMessagePage(messageService.pullOfflineFromCheckpoint(userId, deviceId, limit));
     }
 
     private SingleMessageView toSingleMessageView(MessageDO message) {
@@ -710,8 +724,10 @@ class WebSocketFrameHandlerIntegrationTest {
         RedisStateProperties redisStateProperties = new RedisStateProperties();
         redisStateProperties.setClientMsgIdTtlSeconds(60);
 
-        EmbeddedChannel forbiddenChannel = new EmbeddedChannel(newHandler(
-                metricsService, null, null, idempotencyService, null, null, redisStateProperties));
+        EmbeddedChannel forbiddenChannel = new EmbeddedChannel(createHandler(
+                newHandlerFixture(metricsService)
+                        .idempotencyService(idempotencyService)
+                        .redisStateProperties(redisStateProperties)));
         forbiddenChannel.attr(NettyAttr.USER_ID).set(1L);
 
         forbiddenChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"CHAT\",\"targetUserId\":2,\"clientMsgId\":\"cid-contact\",\"content\":\"hello\"}"));
@@ -724,8 +740,10 @@ class WebSocketFrameHandlerIntegrationTest {
         when(contactService.isSingleChatAllowed(1L, 2L)).thenReturn(true);
         when(messageService.persistMessage(any(MessageDO.class))).thenThrow(new RuntimeException("db down"));
 
-        EmbeddedChannel persistFailChannel = new EmbeddedChannel(newHandler(
-                metricsService, null, null, idempotencyService, null, null, redisStateProperties));
+        EmbeddedChannel persistFailChannel = new EmbeddedChannel(createHandler(
+                newHandlerFixture(metricsService)
+                        .idempotencyService(idempotencyService)
+                        .redisStateProperties(redisStateProperties)));
         persistFailChannel.attr(NettyAttr.USER_ID).set(1L);
 
         persistFailChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"CHAT\",\"targetUserId\":2,\"clientMsgId\":\"cid-fail\",\"content\":\"hello\"}"));
@@ -754,7 +772,8 @@ class WebSocketFrameHandlerIntegrationTest {
 
     @Test
     void chatShouldRejectWhenSensitiveWordHit() throws Exception {
-        when(messageService.persistMessage(any(MessageDO.class))).thenThrow(new SensitiveWordHitException());
+        when(messageService.persistMessage(any(MessageDO.class)))
+                .thenThrow(new MessageRecallException("SENSITIVE_WORD_HIT", "message contains sensitive words"));
 
         EmbeddedChannel channel = new EmbeddedChannel(newHandler(metricsService));
         channel.attr(NettyAttr.USER_ID).set(1L);
@@ -1037,8 +1056,10 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupMessageService.persistMessage(101L, 1L, "gc-fail", "TEXT", "hello"))
                 .thenThrow(new RuntimeException("db down"));
 
-        EmbeddedChannel senderChannel = new EmbeddedChannel(newHandler(
-                metricsService, null, null, idempotencyService, null, null, redisStateProperties));
+        EmbeddedChannel senderChannel = new EmbeddedChannel(createHandler(
+                newHandlerFixture(metricsService)
+                        .idempotencyService(idempotencyService)
+                        .redisStateProperties(redisStateProperties)));
         senderChannel.attr(NettyAttr.USER_ID).set(1L);
 
         senderChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_CHAT\",\"groupId\":101,\"clientMsgId\":\"gc-fail\",\"content\":\"hello\"}"));
@@ -1204,7 +1225,8 @@ class WebSocketFrameHandlerIntegrationTest {
     @Test
     void groupChatShouldRejectWhenSensitiveWordHit() throws Exception {
         when(groupService.isActiveMember(101L, 1L)).thenReturn(true);
-        when(groupMessageService.persistMessage(101L, 1L, null, "TEXT", "testban group")).thenThrow(new SensitiveWordHitException());
+        when(groupMessageService.persistMessage(101L, 1L, null, "TEXT", "testban group"))
+                .thenThrow(new MessageRecallException("SENSITIVE_WORD_HIT", "message contains sensitive words"));
 
         EmbeddedChannel senderChannel = new EmbeddedChannel(newHandler(metricsService));
         senderChannel.attr(NettyAttr.USER_ID).set(1L);
@@ -1236,7 +1258,9 @@ class WebSocketFrameHandlerIntegrationTest {
                 .thenReturn(new GroupMessagePersistResult(saved));
 
         List<Runnable> submittedTasks = new ArrayList<>();
-        EmbeddedChannel senderChannel = new EmbeddedChannel(newHandler(metricsService, submittedTasks::add));
+        EmbeddedChannel senderChannel = new EmbeddedChannel(createHandler(
+                newHandlerFixture(metricsService)
+                        .groupPushExecutor(submittedTasks::add)));
         senderChannel.attr(NettyAttr.USER_ID).set(1L);
 
         senderChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_CHAT\",\"groupId\":101,\"content\":\"parallel-batch\"}"));
@@ -1275,7 +1299,10 @@ class WebSocketFrameHandlerIntegrationTest {
 
         List<Runnable> submittedTasks = new ArrayList<>();
         GroupPushCoordinator coordinator = new GroupPushCoordinator();
-        EmbeddedChannel senderChannel = new EmbeddedChannel(newHandler(metricsService, submittedTasks::add, coordinator));
+        EmbeddedChannel senderChannel = new EmbeddedChannel(createHandler(
+                newHandlerFixture(metricsService)
+                        .groupPushExecutor(submittedTasks::add)
+                        .groupPushCoordinator(coordinator)));
         senderChannel.attr(NettyAttr.USER_ID).set(1L);
 
         senderChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_CHAT\",\"groupId\":101,\"content\":\"m1\"}"));
@@ -1310,7 +1337,9 @@ class WebSocketFrameHandlerIntegrationTest {
         when(groupMessageService.persistMessage(101L, 1L, null, "TEXT", "boom"))
                 .thenReturn(new GroupMessagePersistResult(saved));
 
-        EmbeddedChannel senderChannel = new EmbeddedChannel(newHandler(metricsService, Runnable::run));
+        EmbeddedChannel senderChannel = new EmbeddedChannel(createHandler(
+                newHandlerFixture(metricsService)
+                        .groupPushExecutor(Runnable::run)));
         senderChannel.attr(NettyAttr.USER_ID).set(1L);
 
         senderChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_CHAT\",\"groupId\":101,\"content\":\"boom\"}"));
@@ -1340,16 +1369,15 @@ class WebSocketFrameHandlerIntegrationTest {
         List<Runnable> acceptedTasks = new ArrayList<>();
         AtomicInteger executeCount = new AtomicInteger(0);
 
-        EmbeddedChannel senderChannel = new EmbeddedChannel(newHandler(
-                metricsService,
-                command -> {
+        EmbeddedChannel senderChannel = new EmbeddedChannel(createHandler(
+                newHandlerFixture(metricsService)
+                        .groupPushExecutor(command -> {
                     if (executeCount.getAndIncrement() == 0) {
                         acceptedTasks.add(command);
                         return;
                     }
                     throw new RejectedExecutionException("queue full");
-                }
-        ));
+                })));
         senderChannel.attr(NettyAttr.USER_ID).set(1L);
 
         senderChannel.writeInbound(new TextWebSocketFrame("{\"type\":\"GROUP_CHAT\",\"groupId\":101,\"content\":\"degrade\"}"));

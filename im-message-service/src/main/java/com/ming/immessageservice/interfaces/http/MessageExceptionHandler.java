@@ -2,6 +2,8 @@ package com.ming.immessageservice.interfaces.http;
 
 import com.ming.imapicontract.common.ApiResponse;
 import com.ming.immessageservice.domain.exception.MessageRpcException;
+import com.ming.immessageservice.sensitive.SensitiveWordHitException;
+import com.ming.immessageservice.sensitive.SensitiveWordUnavailableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -24,6 +26,16 @@ public class MessageExceptionHandler {
     @ExceptionHandler(SecurityException.class)
     public ApiResponse<Void> handleSecurityException(SecurityException ex) {
         return ApiResponse.failure("FORBIDDEN", ex.getMessage());
+    }
+
+    @ExceptionHandler(SensitiveWordHitException.class)
+    public ApiResponse<Void> handleSensitiveWordHitException(SensitiveWordHitException ex) {
+        return ApiResponse.failure(ex.getCode(), ex.getMessage());
+    }
+
+    @ExceptionHandler(SensitiveWordUnavailableException.class)
+    public ApiResponse<Void> handleSensitiveWordUnavailableException(SensitiveWordUnavailableException ex) {
+        return ApiResponse.failure(ex.getCode(), ex.getMessage());
     }
 
     @ExceptionHandler(Exception.class)

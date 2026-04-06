@@ -1,16 +1,13 @@
 package com.ming.imchatserver.netty;
 
-import com.ming.imchatserver.application.facade.AuthFacade;
 import com.ming.imchatserver.application.facade.MessageFacade;
 import com.ming.imchatserver.application.facade.SocialFacade;
 import com.ming.imchatserver.config.InstanceProperties;
 import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.config.RateLimitProperties;
-import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.observability.RuntimeObservabilitySettings;
 import com.ming.imchatserver.service.AuthService;
-import com.ming.imchatserver.service.IdempotencyService;
 import com.ming.imchatserver.service.RateLimitService;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
@@ -33,19 +30,14 @@ import java.util.concurrent.Executor;
     private final ChannelUserManager channelUserManager;
     private final SocialFacade socialFacade;
     private final MetricsService metricsService;
-    private final Executor groupPushExecutor;
-    private final GroupPushCoordinator groupPushCoordinator;
-    private final IdempotencyService idempotencyService;
     private final RateLimitService rateLimitService;
     private final RateLimitProperties rateLimitProperties;
-    private final RedisStateProperties redisStateProperties;
     private final RuntimeObservabilitySettings runtimeObservabilitySettings;
     private final HealthEndpoint healthEndpoint;
     private final InstanceProperties instanceProperties;
     private final Executor wsBusinessExecutor;
     private final GroupPushDispatcher groupPushDispatcher;
     private final MessageFacade messageFacade;
-    private final AuthFacade authFacadeFacade;
     /**
      * 创建 Channel 初始化器，并注入各业务 Handler 所需依赖。
      */
@@ -55,36 +47,26 @@ import java.util.concurrent.Executor;
                                   ChannelUserManager channelUserManager,
                                   SocialFacade socialFacade,
                                   MetricsService metricsService,
-                                  Executor groupPushExecutor,
-                                  GroupPushCoordinator groupPushCoordinator,
-                                  IdempotencyService idempotencyService,
                                   RateLimitService rateLimitService,
                                   RateLimitProperties rateLimitProperties,
-                                  RedisStateProperties redisStateProperties,
                                   RuntimeObservabilitySettings runtimeObservabilitySettings,
                                   HealthEndpoint healthEndpoint,
                                   InstanceProperties instanceProperties,
                                   GroupPushDispatcher groupPushDispatcher,
                                   MessageFacade messageFacade,
-                                  AuthFacade authFacade,
                                   Executor wsBusinessExecutor) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
         this.socialFacade = socialFacade;
         this.metricsService = metricsService;
-        this.groupPushExecutor = groupPushExecutor;
-        this.groupPushCoordinator = groupPushCoordinator;
-        this.idempotencyService = idempotencyService;
         this.rateLimitService = rateLimitService;
         this.rateLimitProperties = rateLimitProperties;
-        this.redisStateProperties = redisStateProperties;
         this.runtimeObservabilitySettings = runtimeObservabilitySettings;
         this.healthEndpoint = healthEndpoint;
         this.instanceProperties = instanceProperties;
         this.groupPushDispatcher = groupPushDispatcher;
         this.messageFacade = messageFacade;
-        this.authFacadeFacade = authFacade;
         this.wsBusinessExecutor = wsBusinessExecutor;
     }
 
@@ -115,10 +97,8 @@ import java.util.concurrent.Executor;
         ch.pipeline().addLast(new WebSocketServerProtocolHandler(properties.getWebsocketPath(), null, true, properties.getMaxContentLength()));
         // 业务帧鉴权（要求 channel 已绑定 userId）
         ch.pipeline().addLast(new WsBusinessAuthHandler(channelUserManager));
-        ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, null, socialFacade,
-                properties, metricsService, groupPushExecutor, groupPushCoordinator,
-                idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
-                groupPushDispatcher, messageFacade, authFacadeFacade,
+        ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, socialFacade,
+                properties, groupPushDispatcher, messageFacade,
                 wsBusinessExecutor));
         ch.pipeline().addLast(new IdleEventHandler(channelUserManager));
     }

@@ -2,9 +2,9 @@ package com.ming.immessageservice.domain.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ming.imapicontract.message.GroupMessageDTO;
+import com.ming.imapicontract.message.MessageContentCodec;
 import com.ming.imapicontract.message.PullGroupOfflineResponse;
 import com.ming.immessageservice.domain.exception.MessageRpcException;
-import com.ming.immessageservice.domain.support.MessageContentCodec;
 import com.ming.immessageservice.infrastructure.dao.GroupMessageDO;
 import com.ming.immessageservice.infrastructure.mapper.GroupCursorMapper;
 import com.ming.immessageservice.infrastructure.mapper.GroupMessageMapper;

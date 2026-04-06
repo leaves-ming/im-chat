@@ -1,7 +1,6 @@
-package com.ming.imchatserver.sensitive;
+package com.ming.immessageservice.sensitive;
 
-import com.ming.imchatserver.config.SensitiveWordProperties;
-import com.ming.imchatserver.metrics.MetricsService;
+import com.ming.immessageservice.config.SensitiveWordProperties;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,21 +25,13 @@ public class SensitiveWordService {
 
     private final SensitiveWordProperties properties;
     private final ResourceLoader resourceLoader;
-    private final MetricsService metricsService;
     private volatile SensitiveWordEngine engine = new SensitiveWordEngine(List.of());
     private volatile RuntimeException loadFailure;
 
     @Autowired
-    public SensitiveWordService(SensitiveWordProperties properties,
-                                ResourceLoader resourceLoader,
-                                MetricsService metricsService) {
+    public SensitiveWordService(SensitiveWordProperties properties, ResourceLoader resourceLoader) {
         this.properties = properties;
         this.resourceLoader = resourceLoader;
-        this.metricsService = metricsService;
-    }
-
-    public SensitiveWordService(SensitiveWordProperties properties, ResourceLoader resourceLoader) {
-        this(properties, resourceLoader, null);
     }
 
     @PostConstruct
@@ -48,28 +39,11 @@ public class SensitiveWordService {
         reload();
     }
 
-    public boolean contains(String text) {
-        return filter(text).isHit();
-    }
-
-    public String replace(String text) {
-        return filter(text).getOutputText();
-    }
-
-    public boolean isRejectMode() {
-        return resolveMode() == SensitiveWordMode.REJECT;
-    }
-
-    public SensitiveWordFilterResult check(String text) {
-        return filter(text);
-    }
-
     public SensitiveWordFilterResult filter(String text) {
         SensitiveWordMode mode = resolveMode();
         if (mode == SensitiveWordMode.OFF) {
             return SensitiveWordFilterResult.passThrough(SensitiveWordMode.OFF, text);
         }
-        incrementCheckMetric();
         ensureAvailable();
 
         SensitiveWordEngine.EngineResult engineResult = engine.filter(text);
@@ -81,10 +55,6 @@ public class SensitiveWordService {
                 outputText
         );
         if (result.isHit()) {
-            incrementHitMetric();
-            if (mode == SensitiveWordMode.REPLACE) {
-                incrementReplaceMetric();
-            }
             logger.warn("sensitive word hit mode={} matchedWord={} textLength={} failOpen={}",
                     mode,
                     result.getMatchedWord(),
@@ -94,11 +64,12 @@ public class SensitiveWordService {
         return result;
     }
 
-    public void validateTextOrThrow(String text) {
+    public String filterText(String text) {
         SensitiveWordFilterResult result = filter(text);
         if (result.shouldReject()) {
             throw new SensitiveWordHitException(result.getMatchedWord());
         }
+        return result.getOutputText();
     }
 
     void reload() {
@@ -159,23 +130,5 @@ public class SensitiveWordService {
             return;
         }
         throw new SensitiveWordUnavailableException(properties.getWordSource(), failure);
-    }
-
-    private void incrementCheckMetric() {
-        if (metricsService != null) {
-            metricsService.incrementSensitiveCheck();
-        }
-    }
-
-    private void incrementHitMetric() {
-        if (metricsService != null) {
-            metricsService.incrementSensitiveHit();
-        }
-    }
-
-    private void incrementReplaceMetric() {
-        if (metricsService != null) {
-            metricsService.incrementSensitiveReplace();
-        }
     }
 }

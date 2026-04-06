@@ -50,6 +50,8 @@ import java.util.List;
 @Component
 public class RemoteMessageFacade implements MessageFacade {
 
+    private final ThreadLocal<PendingStatusNotify> pendingStatusNotify = new ThreadLocal<>();
+
     private final MessageServiceClient messageServiceClient;
     private final RemoteGroupService groupService;
     private final IdempotencyService idempotencyService;
@@ -84,12 +86,20 @@ public class RemoteMessageFacade implements MessageFacade {
     public AckReportResult reportAck(Long reporterUserId, String serverMsgId, String targetStatus) {
         AckMessageStatusResponse response = unwrap(messageServiceClient.ackMessageStatus(
                 new AckMessageStatusRequest(reporterUserId, serverMsgId, targetStatus)));
-        return new AckReportResult(toSingleMessageView(response.message()), response.status(), response.updated(), response.ackAt());
+        SingleMessageView message = toSingleMessageView(response.message());
+        if (response.updated() > 0 && message != null) {
+            pendingStatusNotify.set(PendingStatusNotify.from(message, response.status()));
+        } else {
+            pendingStatusNotify.remove();
+        }
+        return new AckReportResult(message, response.status(), response.updated(), response.ackAt());
     }
 
     @Override
     public boolean enqueueStatusNotify(SingleMessageView message, String status) {
-        return true;
+        PendingStatusNotify pending = pendingStatusNotify.get();
+        pendingStatusNotify.remove();
+        return pending != null && pending.matches(message, status);
     }
 
     @Override
@@ -293,5 +303,20 @@ public class RemoteMessageFacade implements MessageFacade {
             return;
         }
         idempotencyService.releaseClientMessage(userId, clientMsgId);
+    }
+
+    private record PendingStatusNotify(String serverMsgId, Long fromUserId, Long toUserId, String status) {
+
+        private static PendingStatusNotify from(SingleMessageView message, String status) {
+            return new PendingStatusNotify(message.serverMsgId(), message.fromUserId(), message.toUserId(), status);
+        }
+
+        private boolean matches(SingleMessageView message, String status) {
+            return message != null
+                    && serverMsgId.equals(message.serverMsgId())
+                    && java.util.Objects.equals(fromUserId, message.fromUserId())
+                    && java.util.Objects.equals(toUserId, message.toUserId())
+                    && this.status.equals(status);
+        }
     }
 }

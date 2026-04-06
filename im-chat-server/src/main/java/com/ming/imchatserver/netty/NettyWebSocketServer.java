@@ -1,16 +1,13 @@
 package com.ming.imchatserver.netty;
 
-import com.ming.imchatserver.application.facade.AuthFacade;
 import com.ming.imchatserver.application.facade.MessageFacade;
 import com.ming.imchatserver.application.facade.SocialFacade;
 import com.ming.imchatserver.config.InstanceProperties;
 import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.config.RateLimitProperties;
-import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.observability.RuntimeObservabilitySettings;
 import com.ming.imchatserver.service.AuthService;
-import com.ming.imchatserver.service.IdempotencyService;
 import com.ming.imchatserver.service.RateLimitService;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
@@ -46,19 +43,14 @@ public class NettyWebSocketServer {
     private final ChannelUserManager channelUserManager;
     private final SocialFacade socialFacade;
     private final MetricsService metricsService;
-    private final Executor groupPushExecutor;
-    private final GroupPushCoordinator groupPushCoordinator;
-    private final IdempotencyService idempotencyService;
     private final RateLimitService rateLimitService;
     private final RateLimitProperties rateLimitProperties;
-    private final RedisStateProperties redisStateProperties;
     private final RuntimeObservabilitySettings runtimeObservabilitySettings;
     private final HealthEndpoint healthEndpoint;
     private final InstanceProperties instanceProperties;
     private final Executor wsBusinessExecutor;
     private final GroupPushDispatcher groupPushDispatcher;
     private final MessageFacade messageFacade;
-    private final AuthFacade authFacade;
 
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
@@ -77,36 +69,26 @@ public class NettyWebSocketServer {
                                 ChannelUserManager channelUserManager,
                                 SocialFacade socialFacade,
                                 MetricsService metricsService,
-                                @Qualifier("groupPushExecutor") Executor groupPushExecutor,
-                                GroupPushCoordinator groupPushCoordinator,
-                                IdempotencyService idempotencyService,
                                 RateLimitService rateLimitService,
                                 RateLimitProperties rateLimitProperties,
-                                RedisStateProperties redisStateProperties,
                                 RuntimeObservabilitySettings runtimeObservabilitySettings,
                                 HealthEndpoint healthEndpoint,
                                 InstanceProperties instanceProperties,
                                 GroupPushDispatcher groupPushDispatcher,
                                 MessageFacade messageFacade,
-                                AuthFacade authFacade,
                                 @Qualifier("imWsBusinessExecutor") Executor wsBusinessExecutor) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
         this.socialFacade = socialFacade;
         this.metricsService = metricsService;
-        this.groupPushExecutor = groupPushExecutor;
-        this.groupPushCoordinator = groupPushCoordinator;
-        this.idempotencyService = idempotencyService;
         this.rateLimitService = rateLimitService;
         this.rateLimitProperties = rateLimitProperties;
-        this.redisStateProperties = redisStateProperties;
         this.runtimeObservabilitySettings = runtimeObservabilitySettings;
         this.healthEndpoint = healthEndpoint;
         this.instanceProperties = instanceProperties;
         this.groupPushDispatcher = groupPushDispatcher;
         this.messageFacade = messageFacade;
-        this.authFacade = authFacade;
         this.wsBusinessExecutor = wsBusinessExecutor;
     }
 
@@ -125,11 +107,10 @@ public class NettyWebSocketServer {
                 .localAddress(new InetSocketAddress(properties.getPort()))
                 .childHandler(new NettyServerInitializer(properties, authService, channelUserManager,
                         socialFacade, metricsService,
-                        groupPushExecutor, groupPushCoordinator,
-                        idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties,
+                        rateLimitService, rateLimitProperties,
                         runtimeObservabilitySettings, healthEndpoint, instanceProperties,
                         groupPushDispatcher,
-                        messageFacade, authFacade,
+                        messageFacade,
                         wsBusinessExecutor));
         serverChannel = b.bind().sync().channel();
         logger.info("Netty server started and listening on {}", properties.getPort());

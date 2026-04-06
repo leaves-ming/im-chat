@@ -183,11 +183,6 @@ im:
     processing-timeout-ms: 30000
     max-retry-count: 8
     dispatch-topic: im.msg.dispatch
-  sensitive:
-    enabled: false
-    mode: REJECT
-    word-source: classpath:sensitive_words.txt
-    fail-open: true
   file:
     local-base-dir: data/uploads
     public-url-prefix: /files

@@ -23,6 +23,7 @@ import com.ming.immessageservice.config.MessageServiceProperties;
 import com.ming.immessageservice.domain.service.GroupMessageDomainService;
 import com.ming.immessageservice.domain.service.SingleMessageDomainService;
 import com.ming.immessageservice.remote.file.FileServiceClient;
+import com.ming.immessageservice.sensitive.SensitiveWordService;
 import org.springframework.stereotype.Service;
 
 /**
@@ -35,19 +36,23 @@ public class MessageCommandApplicationService {
     private final GroupMessageDomainService groupMessageDomainService;
     private final MessageServiceProperties messageServiceProperties;
     private final FileServiceClient fileServiceClient;
+    private final SensitiveWordService sensitiveWordService;
 
     public MessageCommandApplicationService(SingleMessageDomainService singleMessageDomainService,
                                             GroupMessageDomainService groupMessageDomainService,
                                             MessageServiceProperties messageServiceProperties,
-                                            FileServiceClient fileServiceClient) {
+                                            FileServiceClient fileServiceClient,
+                                            SensitiveWordService sensitiveWordService) {
         this.singleMessageDomainService = singleMessageDomainService;
         this.groupMessageDomainService = groupMessageDomainService;
         this.messageServiceProperties = messageServiceProperties;
         this.fileServiceClient = fileServiceClient;
+        this.sensitiveWordService = sensitiveWordService;
     }
 
     public PersistSingleMessageResponse persistSingleMessage(PersistSingleMessageRequest request) {
         String content = normalizeContent(request.msgType(), request.content(), request.fromUserId());
+        content = sensitiveWordService.filterText(content);
         SingleMessageDomainService.PersistResult result = singleMessageDomainService.persistSingleMessage(
                 request.fromUserId(),
                 request.targetUserId(),
@@ -67,6 +72,7 @@ public class MessageCommandApplicationService {
 
     public PersistGroupMessageResponse persistGroupMessage(PersistGroupMessageRequest request) {
         String content = normalizeContent(request.msgType(), request.content(), request.fromUserId());
+        content = sensitiveWordService.filterText(content);
         return new PersistGroupMessageResponse(groupMessageDomainService.persistMessage(
                 request.groupId(), request.fromUserId(), request.clientMsgId(), request.msgType(), content));
     }
