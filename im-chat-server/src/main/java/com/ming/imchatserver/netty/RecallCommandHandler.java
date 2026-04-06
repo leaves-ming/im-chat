@@ -61,7 +61,7 @@ public class RecallCommandHandler implements WsCommandHandler {
     private void handleGroupRecall(WsCommandContext context) throws Exception {
         Long userId = requireUser(context);
         String serverMsgId = requireServerMsgId(context);
-        GroupMessageView recalled = socialFacade.recallGroupMessage(userId, serverMsgId, recallWindowSeconds());
+        GroupMessageView recalled = messageFacade.recallGroupMessage(userId, serverMsgId, recallWindowSeconds());
         ObjectNode result = RecallProtocolSupport.buildGroupRecallNode(protocolSupport.mapper(), "GROUP_MSG_RECALL_RESULT", recalled);
         protocolSupport.sendJson(context.channel(), result);
         notifyGroupRecall(context.channel(), recalled);

@@ -3,6 +3,7 @@ package com.ming.imchatserver.netty;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.ming.imchatserver.application.facade.MessageFacade;
 import com.ming.imchatserver.application.facade.SocialFacade;
 import com.ming.imchatserver.application.model.GroupMessagePage;
 import com.ming.imchatserver.application.model.GroupMessagePersistResult;
@@ -19,13 +20,16 @@ public class GroupCommandHandler implements WsCommandHandler {
     private static final int DEFAULT_GROUP_PULL_LIMIT = 50;
     private static final long INVALID_GROUP_CURSOR_SEQ = Long.MIN_VALUE;
 
+    private final MessageFacade messageFacade;
     private final SocialFacade socialFacade;
     private final NettyProperties nettyProperties;
     private final WsProtocolSupport protocolSupport;
 
-    public GroupCommandHandler(SocialFacade socialFacade,
+    public GroupCommandHandler(MessageFacade messageFacade,
+                               SocialFacade socialFacade,
                                NettyProperties nettyProperties,
                                WsProtocolSupport protocolSupport) {
+        this.messageFacade = messageFacade;
         this.socialFacade = socialFacade;
         this.nettyProperties = nettyProperties;
         this.protocolSupport = protocolSupport;
@@ -109,7 +113,7 @@ public class GroupCommandHandler implements WsCommandHandler {
         String msgType = MessageContentCodec.normalizeMsgType(context.payload().path("msgType").asText(null));
         String content = MessageContentCodec.validateAndSerializeIncomingContent(msgType, context.payload().get("content"));
         String clientMsgId = normalizeClientMsgId(context.payload().path("clientMsgId").asText(null));
-        GroupMessagePersistResult persistResult = socialFacade.sendGroupChat(groupId, fromUserId, clientMsgId, msgType, content);
+        GroupMessagePersistResult persistResult = messageFacade.sendGroupChat(groupId, fromUserId, clientMsgId, msgType, content);
         GroupMessageView message = persistResult.message();
         socialFacade.dispatchGroupPush(groupId, message);
     }
@@ -127,7 +131,7 @@ public class GroupCommandHandler implements WsCommandHandler {
         if (Long.valueOf(INVALID_GROUP_CURSOR_SEQ).equals(cursorSeq)) {
             return;
         }
-        GroupMessagePage pullResult = socialFacade.pullGroupOffline(groupId, userId, cursorSeq, limit);
+        GroupMessagePage pullResult = messageFacade.pullGroupOffline(groupId, userId, cursorSeq, limit);
         ObjectNode resp = protocolSupport.mapper().createObjectNode();
         resp.put("type", "GROUP_PULL_OFFLINE_RESULT");
         resp.put("groupId", groupId);

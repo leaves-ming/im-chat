@@ -4,8 +4,6 @@ import com.ming.imchatserver.application.model.ContactOperationResult;
 import com.ming.imchatserver.application.model.ContactPage;
 import com.ming.imchatserver.application.model.GroupJoinResult;
 import com.ming.imchatserver.application.model.GroupMemberPage;
-import com.ming.imchatserver.application.model.GroupMessagePage;
-import com.ming.imchatserver.application.model.GroupMessagePersistResult;
 import com.ming.imchatserver.application.model.GroupMessageView;
 import com.ming.imchatserver.application.model.GroupQuitResult;
 
@@ -27,12 +25,6 @@ public interface SocialFacade {
     GroupQuitResult quitGroup(Long groupId, Long userId);
 
     GroupMemberPage listMembers(Long groupId, Long cursorUserId, int limit);
-
-    GroupMessagePersistResult sendGroupChat(Long groupId, Long fromUserId, String clientMsgId, String msgType, String content);
-
-    GroupMessagePage pullGroupOffline(Long groupId, Long userId, Long cursorSeq, int limit);
-
-    GroupMessageView recallGroupMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds);
 
     void dispatchGroupPush(Long groupId, GroupMessageView message) throws Exception;
 

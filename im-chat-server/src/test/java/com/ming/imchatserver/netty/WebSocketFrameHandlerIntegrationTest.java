@@ -139,15 +139,10 @@ class WebSocketFrameHandlerIntegrationTest {
         SocialFacade socialFacade = new SocialFacadeImpl(
                 contactService,
                 groupService,
-                groupMessageService,
                 channelUserManager,
                 groupPushExecutor,
                 groupPushCoordinator,
                 metricsService,
-                idempotencyService,
-                rateLimitService,
-                rateLimitProperties,
-                redisStateProperties,
                 nettyProperties
         );
         return new WebSocketFrameHandler(
@@ -162,13 +157,16 @@ class WebSocketFrameHandlerIntegrationTest {
                 rateLimitService,
                 rateLimitProperties,
                 redisStateProperties,
-                bridgeMessageFacade(),
+                bridgeMessageFacade(idempotencyService, rateLimitService, rateLimitProperties, redisStateProperties),
                 bridgeAuthFacade(),
                 businessExecutor
         );
     }
 
-    private MessageFacade bridgeMessageFacade() {
+    private MessageFacade bridgeMessageFacade(IdempotencyService idempotencyService,
+                                             RateLimitService rateLimitService,
+                                             RateLimitProperties rateLimitProperties,
+                                             RedisStateProperties redisStateProperties) {
         return new MessageFacade() {
             @Override
             public ChatPersistResult sendChat(Long fromUserId, Long targetUserId, String clientMsgId, String msgType, String content) {
@@ -228,6 +226,42 @@ class WebSocketFrameHandlerIntegrationTest {
             public SingleMessageView recallMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds) {
                 return toSingleMessageView(messageService.recallMessage(operatorUserId, serverMsgId, recallWindowSeconds));
             }
+
+            @Override
+            public GroupMessagePersistResult sendGroupChat(Long groupId, Long fromUserId, String clientMsgId, String msgType, String content) {
+                if (!groupService.isActiveMember(groupId, fromUserId)) {
+                    throw new SecurityException("sender is not active group member");
+                }
+                if (!consumeMessageRateLimit(fromUserId, rateLimitService, rateLimitProperties)) {
+                    throw new IllegalArgumentException("RATE_LIMITED:message send rate exceeded");
+                }
+                if (!claimClientMessageId(fromUserId, clientMsgId, idempotencyService, redisStateProperties)) {
+                    throw new IllegalArgumentException("DUPLICATE_REQUEST:clientMsgId replay detected");
+                }
+                try {
+                    return groupMessageService.persistMessage(groupId, fromUserId, clientMsgId, msgType, content);
+                } catch (RuntimeException ex) {
+                    releaseClientMessageId(fromUserId, clientMsgId, idempotencyService);
+                    throw ex;
+                }
+            }
+
+            @Override
+            public GroupMessagePage pullGroupOffline(Long groupId, Long userId, Long cursorSeq, int limit) {
+                if (!groupService.isActiveMember(groupId, userId)) {
+                    throw new SecurityException("user is not active group member");
+                }
+                return groupMessageService.pullOffline(groupId, userId, cursorSeq, limit);
+            }
+
+            @Override
+            public GroupMessageView recallGroupMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds) {
+                GroupMessageView existing = groupMessageService.findByServerMsgId(serverMsgId);
+                if (existing == null) {
+                    throw new IllegalArgumentException("serverMsgId not found");
+                }
+                return groupMessageService.recallMessage(operatorUserId, serverMsgId, recallWindowSeconds);
+            }
         };
     }
 
@@ -271,6 +305,40 @@ class WebSocketFrameHandlerIntegrationTest {
             items.add(toSingleMessageView(message));
         }
         return new SingleMessagePage(items, page.isHasMore(), page.getNextCursorCreatedAt(), page.getNextCursorId());
+    }
+
+    private boolean consumeMessageRateLimit(Long userId,
+                                            RateLimitService rateLimitService,
+                                            RateLimitProperties rateLimitProperties) {
+        if (rateLimitService == null || rateLimitProperties == null || userId == null) {
+            return true;
+        }
+        return rateLimitService.checkAndIncrement(
+                "message_send",
+                "userId",
+                String.valueOf(userId),
+                rateLimitProperties.getMessageSend().getLimit(),
+                rateLimitProperties.getMessageSend().getWindowSeconds()).allowed();
+    }
+
+    private boolean claimClientMessageId(Long userId,
+                                         String clientMsgId,
+                                         IdempotencyService idempotencyService,
+                                         RedisStateProperties redisStateProperties) {
+        if (idempotencyService == null || redisStateProperties == null || clientMsgId == null || clientMsgId.isBlank() || userId == null) {
+            return true;
+        }
+        return idempotencyService.claimClientMessage(
+                userId,
+                clientMsgId,
+                java.time.Duration.ofSeconds(redisStateProperties.getClientMsgIdTtlSeconds()));
+    }
+
+    private void releaseClientMessageId(Long userId, String clientMsgId, IdempotencyService idempotencyService) {
+        if (idempotencyService == null || clientMsgId == null || clientMsgId.isBlank() || userId == null) {
+            return;
+        }
+        idempotencyService.releaseClientMessage(userId, clientMsgId);
     }
 
     @Test

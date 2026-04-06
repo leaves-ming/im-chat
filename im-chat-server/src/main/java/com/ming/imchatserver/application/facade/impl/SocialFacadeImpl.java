@@ -7,21 +7,14 @@ import com.ming.imchatserver.application.model.ContactOperationResult;
 import com.ming.imchatserver.application.model.ContactPage;
 import com.ming.imchatserver.application.model.GroupJoinResult;
 import com.ming.imchatserver.application.model.GroupMemberPage;
-import com.ming.imchatserver.application.model.GroupMessagePage;
-import com.ming.imchatserver.application.model.GroupMessagePersistResult;
 import com.ming.imchatserver.application.model.GroupMessageView;
 import com.ming.imchatserver.application.model.GroupQuitResult;
 import com.ming.imchatserver.config.NettyProperties;
-import com.ming.imchatserver.config.RateLimitProperties;
-import com.ming.imchatserver.config.RedisStateProperties;
 import com.ming.imchatserver.message.MessageContentCodec;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.netty.ChannelUserManager;
 import com.ming.imchatserver.netty.GroupPushCoordinator;
-import com.ming.imchatserver.service.IdempotencyService;
-import com.ming.imchatserver.service.RateLimitService;
 import com.ming.imchatserver.service.remote.RemoteContactService;
-import com.ming.imchatserver.service.remote.RemoteGroupMessageService;
 import com.ming.imchatserver.service.remote.RemoteGroupService;
 import io.netty.channel.Channel;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
@@ -29,7 +22,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -47,41 +39,26 @@ public class SocialFacadeImpl implements SocialFacade {
 
     private final RemoteContactService contactService;
     private final RemoteGroupService groupService;
-    private final RemoteGroupMessageService groupMessageService;
     private final ChannelUserManager channelUserManager;
     private final Executor groupPushExecutor;
     private final GroupPushCoordinator groupPushCoordinator;
     private final MetricsService metricsService;
-    private final IdempotencyService idempotencyService;
-    private final RateLimitService rateLimitService;
-    private final RateLimitProperties rateLimitProperties;
-    private final RedisStateProperties redisStateProperties;
     private final NettyProperties nettyProperties;
     private final ObjectMapper mapper = new ObjectMapper();
 
     public SocialFacadeImpl(RemoteContactService contactService,
                             RemoteGroupService groupService,
-                            RemoteGroupMessageService groupMessageService,
                             ChannelUserManager channelUserManager,
                             Executor groupPushExecutor,
                             GroupPushCoordinator groupPushCoordinator,
                             MetricsService metricsService,
-                            IdempotencyService idempotencyService,
-                            RateLimitService rateLimitService,
-                            RateLimitProperties rateLimitProperties,
-                            RedisStateProperties redisStateProperties,
                             NettyProperties nettyProperties) {
         this.contactService = contactService;
         this.groupService = groupService;
-        this.groupMessageService = groupMessageService;
         this.channelUserManager = channelUserManager;
         this.groupPushExecutor = groupPushExecutor;
         this.groupPushCoordinator = groupPushCoordinator;
         this.metricsService = metricsService;
-        this.idempotencyService = idempotencyService;
-        this.rateLimitService = rateLimitService;
-        this.rateLimitProperties = rateLimitProperties;
-        this.redisStateProperties = redisStateProperties;
         this.nettyProperties = nettyProperties;
     }
 
@@ -113,42 +90,6 @@ public class SocialFacadeImpl implements SocialFacade {
     @Override
     public GroupMemberPage listMembers(Long groupId, Long cursorUserId, int limit) {
         return groupService.listMembers(groupId, cursorUserId, limit);
-    }
-
-    @Override
-    public GroupMessagePersistResult sendGroupChat(Long groupId, Long fromUserId, String clientMsgId, String msgType, String content) {
-        if (!groupService.isActiveMember(groupId, fromUserId)) {
-            throw new SecurityException("sender is not active group member");
-        }
-        if (!consumeMessageRateLimit(fromUserId)) {
-            throw new IllegalArgumentException("RATE_LIMITED:message send rate exceeded");
-        }
-        if (!claimClientMessageId(fromUserId, clientMsgId)) {
-            throw new IllegalArgumentException("DUPLICATE_REQUEST:clientMsgId replay detected");
-        }
-        try {
-            return groupMessageService.persistMessage(groupId, fromUserId, clientMsgId, msgType, content);
-        } catch (RuntimeException ex) {
-            releaseClientMessageId(fromUserId, clientMsgId);
-            throw ex;
-        }
-    }
-
-    @Override
-    public GroupMessagePage pullGroupOffline(Long groupId, Long userId, Long cursorSeq, int limit) {
-        if (!groupService.isActiveMember(groupId, userId)) {
-            throw new SecurityException("user is not active group member");
-        }
-        return groupMessageService.pullOffline(groupId, userId, cursorSeq, limit);
-    }
-
-    @Override
-    public GroupMessageView recallGroupMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds) {
-        GroupMessageView existing = groupMessageService.findByServerMsgId(serverMsgId);
-        if (existing == null) {
-            throw new IllegalArgumentException("serverMsgId not found");
-        }
-        return groupMessageService.recallMessage(operatorUserId, serverMsgId, recallWindowSeconds);
     }
 
     @Override
@@ -276,30 +217,4 @@ public class SocialFacadeImpl implements SocialFacade {
         }
     }
 
-    private boolean consumeMessageRateLimit(Long userId) {
-        if (rateLimitService == null || rateLimitProperties == null || userId == null) {
-            return true;
-        }
-        return rateLimitService.checkAndIncrement(
-                "message_send",
-                "userId",
-                String.valueOf(userId),
-                rateLimitProperties.getMessageSend().getLimit(),
-                rateLimitProperties.getMessageSend().getWindowSeconds()).allowed();
-    }
-
-    private boolean claimClientMessageId(Long userId, String clientMsgId) {
-        if (idempotencyService == null || redisStateProperties == null || clientMsgId == null || clientMsgId.isBlank() || userId == null) {
-            return true;
-        }
-        return idempotencyService.claimClientMessage(userId, clientMsgId,
-                Duration.ofSeconds(redisStateProperties.getClientMsgIdTtlSeconds()));
-    }
-
-    private void releaseClientMessageId(Long userId, String clientMsgId) {
-        if (idempotencyService == null || clientMsgId == null || clientMsgId.isBlank() || userId == null) {
-            return;
-        }
-        idempotencyService.releaseClientMessage(userId, clientMsgId);
-    }
 }

@@ -1,5 +1,8 @@
 package com.ming.imchatserver.application.facade;
 
+import com.ming.imchatserver.application.model.GroupMessagePage;
+import com.ming.imchatserver.application.model.GroupMessagePersistResult;
+import com.ming.imchatserver.application.model.GroupMessageView;
 import com.ming.imchatserver.application.model.SingleMessagePage;
 import com.ming.imchatserver.application.model.SingleMessageView;
 import com.ming.imchatserver.application.model.SingleSyncCursor;
@@ -28,6 +31,16 @@ public interface MessageFacade {
     void advanceSyncCursor(Long userId, String deviceId, SingleMessagePage pageResult);
 
     SingleMessageView recallMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds);
+
+    GroupMessagePersistResult sendGroupChat(Long groupId,
+                                            Long fromUserId,
+                                            String clientMsgId,
+                                            String msgType,
+                                            String content);
+
+    GroupMessagePage pullGroupOffline(Long groupId, Long userId, Long cursorSeq, int limit);
+
+    GroupMessageView recallGroupMessage(Long operatorUserId, String serverMsgId, long recallWindowSeconds);
 
     record ChatPersistResult(String clientMsgId, String serverMsgId, boolean createdNew) {
     }

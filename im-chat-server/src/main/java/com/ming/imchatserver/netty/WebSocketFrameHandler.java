@@ -145,7 +145,7 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
         this.authFacade = Objects.requireNonNull(injectedAuthFacade, "authFacade unavailable");
         this.commandRouter = new WsCommandRouter(
                 new ChatCommandHandler(this.messageFacade, socialFacade, nettyProperties, protocolSupport, channelUserManager),
-                new GroupCommandHandler(socialFacade, nettyProperties, protocolSupport),
+                new GroupCommandHandler(this.messageFacade, socialFacade, nettyProperties, protocolSupport),
                 new ContactCommandHandler(socialFacade, nettyProperties, protocolSupport),
                 new RecallCommandHandler(this.messageFacade, socialFacade, nettyProperties, protocolSupport, channelUserManager)
         );
