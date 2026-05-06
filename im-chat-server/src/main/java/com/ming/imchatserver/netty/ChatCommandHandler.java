@@ -3,13 +3,21 @@ package com.ming.imchatserver.netty;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ming.imchatserver.application.facade.MessageFacade;
 import com.ming.imchatserver.application.facade.SocialFacade;
 import com.ming.imchatserver.application.model.SingleMessagePage;
 import com.ming.imchatserver.application.model.SingleMessageView;
 import com.ming.imchatserver.application.model.SingleSyncCursor;
 import com.ming.imchatserver.config.NettyProperties;
+import com.ming.imchatserver.dao.OutboxMessageDO;
+import com.ming.imchatserver.mapper.OutboxMapper;
+import com.ming.imchatserver.service.IdempotencyService;
 import com.ming.imapicontract.message.MessageContentCodec;
+
+import java.time.Duration;
+import java.util.Date;
+import java.util.UUID;
 import io.netty.channel.Channel;
 
 import java.time.Instant;
@@ -27,17 +35,26 @@ public class ChatCommandHandler implements WsCommandHandler {
     private final NettyProperties nettyProperties;
     private final WsProtocolSupport protocolSupport;
     private final ChannelUserManager channelUserManager;
+    private final IdempotencyService idempotencyService;
+    private final OutboxMapper outboxMapper;
+    private final ObjectMapper objectMapper;
 
     public ChatCommandHandler(MessageFacade messageFacade,
                               SocialFacade socialFacade,
                               NettyProperties nettyProperties,
                               WsProtocolSupport protocolSupport,
-                              ChannelUserManager channelUserManager) {
+                              ChannelUserManager channelUserManager,
+                              IdempotencyService idempotencyService,
+                              OutboxMapper outboxMapper,
+                              ObjectMapper objectMapper) {
         this.messageFacade = messageFacade;
         this.socialFacade = socialFacade;
         this.nettyProperties = nettyProperties;
         this.protocolSupport = protocolSupport;
         this.channelUserManager = channelUserManager;
+        this.idempotencyService = idempotencyService;
+        this.outboxMapper = outboxMapper;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -71,7 +88,50 @@ public class ChatCommandHandler implements WsCommandHandler {
         if (nettyProperties.isSingleChatRequireActiveContact() && !socialFacade.isSingleChatAllowed(fromUserId, targetUserId)) {
             throw new SecurityException("single chat requires active bilateral contacts");
         }
-        MessageFacade.ChatPersistResult result = messageFacade.sendChat(fromUserId, targetUserId, clientMsgId, msgType, content);
+        // 幂等校验：1小时内重复消息直接拦截
+        if (clientMsgId != null && !idempotencyService.claimClientMessage(fromUserId, clientMsgId, Duration.ofHours(1))) {
+            throw new IllegalArgumentException("DUPLICATE_REQUEST: message already processed");
+        }
+        
+        // 写入本地消息表
+        OutboxMessageDO outbox = new OutboxMessageDO();
+        outbox.setEventId(UUID.randomUUID().toString().replace("-", ""));
+        outbox.setClientMsgId(clientMsgId);
+        outbox.setFromUserId(fromUserId);
+        outbox.setPayload(objectMapper.writeValueAsString(context.payload()));
+        outbox.setStatus(0); // PENDING
+        outbox.setAckStatus(0); // 未确认
+        outbox.setRetryCount(0);
+        outbox.setMaxRetryCount(3);
+        outbox.setNextRetryAt(new Date(System.currentTimeMillis() + 1000 * 10)); // 10秒后可重试
+        outbox.setCreatedAt(new Date());
+        outbox.setUpdatedAt(new Date());
+        outboxMapper.insert(outbox);
+        
+        MessageFacade.ChatPersistResult result;
+        try {
+            result = messageFacade.sendChat(fromUserId, targetUserId, clientMsgId, msgType, content);
+            // 持久化成功，更新状态为SUCCESS
+            outbox.setStatus(1);
+            outbox.setMessageId(Long.valueOf(result.serverMsgId()));
+            outbox.setSentAt(new Date());
+            outbox.setUpdatedAt(new Date());
+            outboxMapper.updateById(outbox);
+        } catch (Exception e) {
+            // 发送失败，更新重试次数
+            outbox.setRetryCount(outbox.getRetryCount() + 1);
+            outbox.setFailReason(e.getMessage());
+            if (outbox.getRetryCount() >= outbox.getMaxRetryCount()) {
+                outbox.setStatus(-1); // 标记为失败
+            } else {
+                // 指数退避下次重试时间
+                long nextRetryDelay = 1000L * 10 * (long) Math.pow(2, outbox.getRetryCount());
+                outbox.setNextRetryAt(new Date(System.currentTimeMillis() + nextRetryDelay));
+            }
+            outbox.setUpdatedAt(new Date());
+            outboxMapper.updateById(outbox);
+            throw e;
+        }
         ObjectNode ack = protocolSupport.mapper().createObjectNode();
         ack.put("type", "SERVER_ACK");
         if (result.clientMsgId() == null) {
@@ -96,6 +156,14 @@ public class ChatCommandHandler implements WsCommandHandler {
             throw new IllegalArgumentException("status must be DELIVERED or ACKED");
         }
         MessageFacade.AckReportResult result = messageFacade.reportAck(context.userId(), serverMsgId, targetStatus);
+        
+        // 更新本地消息表ACK状态
+        if (result.updated() > 0) {
+            int ackStatus = "DELIVERED".equals(targetStatus) ? 1 : 2;
+            int status = "ACKED".equals(targetStatus) ? 2 : 1;
+            outboxMapper.updateAckStatus(Long.parseLong(serverMsgId), result.message().fromUserId(), ackStatus, status);
+        }
+        
         ObjectNode resp = protocolSupport.mapper().createObjectNode();
         resp.put("type", "ACK_REPORT_RESULT");
         resp.put("serverMsgId", serverMsgId);

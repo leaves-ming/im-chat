@@ -9,9 +9,11 @@ import com.ming.imchatserver.application.facade.SocialFacade;
 import com.ming.imchatserver.application.model.SingleMessagePage;
 import com.ming.imchatserver.application.model.SingleMessageView;
 import com.ming.imchatserver.config.NettyProperties;
+import com.ming.imchatserver.mapper.OutboxMapper;
 import com.ming.imchatserver.observability.TraceContextSupport;
 import com.ming.imchatserver.service.FileTokenBizException;
 import com.ming.imchatserver.service.GroupBizException;
+import com.ming.imchatserver.service.IdempotencyService;
 import com.ming.imchatserver.service.MessageRecallException;
 import com.ming.imchatserver.service.SocialRpcException;
 import com.ming.imchatserver.file.FileAccessDeniedException;
@@ -44,23 +46,31 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
     private final WsProtocolSupport protocolSupport;
     private final WsCommandRouter commandRouter;
     private final MessageFacade messageFacade;
+    private final IdempotencyService idempotencyService;
+    private final OutboxMapper outboxMapper;
+    private final ObjectMapper objectMapper;
 
     public WebSocketFrameHandler(ChannelUserManager channelUserManager,
                                  SocialFacade socialFacade,
                                  NettyProperties nettyProperties,
                                  GroupPushDispatcher groupPushDispatcher,
                                  MessageFacade messageFacade,
-                                 Executor businessExecutor) {
+                                 Executor businessExecutor,
+                                 IdempotencyService idempotencyService,
+                                 OutboxMapper outboxMapper,
+                                 ObjectMapper objectMapper) {
         this.channelUserManager = channelUserManager;
         this.nettyProperties = nettyProperties;
         this.businessExecutor = businessExecutor == null ? Runnable::run : businessExecutor;
-        ObjectMapper mapper = new ObjectMapper();
-        this.protocolSupport = new WsProtocolSupport(mapper);
+        this.objectMapper = objectMapper;
+        this.protocolSupport = new WsProtocolSupport(objectMapper);
         GroupPushDispatcher requiredGroupPushDispatcher = Objects.requireNonNull(groupPushDispatcher, "groupPushDispatcher unavailable");
         this.messageFacade = Objects.requireNonNull(messageFacade, "messageFacade unavailable");
+        this.idempotencyService = Objects.requireNonNull(idempotencyService, "idempotencyService unavailable");
+        this.outboxMapper = Objects.requireNonNull(outboxMapper, "outboxMapper unavailable");
         SocialFacade requiredSocialFacade = Objects.requireNonNull(socialFacade, "socialFacade unavailable");
         this.commandRouter = new WsCommandRouter(
-                new ChatCommandHandler(this.messageFacade, requiredSocialFacade, nettyProperties, protocolSupport, channelUserManager),
+                new ChatCommandHandler(this.messageFacade, requiredSocialFacade, nettyProperties, protocolSupport, channelUserManager, this.idempotencyService, this.outboxMapper, this.objectMapper),
                 new GroupCommandHandler(this.messageFacade, requiredGroupPushDispatcher, requiredSocialFacade, nettyProperties, protocolSupport),
                 new ContactCommandHandler(requiredSocialFacade, nettyProperties, protocolSupport),
                 new RecallCommandHandler(this.messageFacade, requiredGroupPushDispatcher, nettyProperties, protocolSupport, channelUserManager)

@@ -7,7 +7,10 @@ import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.config.RateLimitProperties;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.observability.RuntimeObservabilitySettings;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ming.imchatserver.mapper.OutboxMapper;
 import com.ming.imchatserver.service.AuthService;
+import com.ming.imchatserver.service.IdempotencyService;
 import com.ming.imchatserver.service.RateLimitService;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
@@ -38,6 +41,9 @@ import java.util.concurrent.Executor;
     private final Executor wsBusinessExecutor;
     private final GroupPushDispatcher groupPushDispatcher;
     private final MessageFacade messageFacade;
+    private final IdempotencyService idempotencyService;
+    private final OutboxMapper outboxMapper;
+    private final ObjectMapper objectMapper;
     /**
      * 创建 Channel 初始化器，并注入各业务 Handler 所需依赖。
      */
@@ -54,7 +60,10 @@ import java.util.concurrent.Executor;
                                   InstanceProperties instanceProperties,
                                   GroupPushDispatcher groupPushDispatcher,
                                   MessageFacade messageFacade,
-                                  Executor wsBusinessExecutor) {
+                                  Executor wsBusinessExecutor,
+                                  IdempotencyService idempotencyService,
+                                  OutboxMapper outboxMapper,
+                                  ObjectMapper objectMapper) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
@@ -68,6 +77,9 @@ import java.util.concurrent.Executor;
         this.groupPushDispatcher = groupPushDispatcher;
         this.messageFacade = messageFacade;
         this.wsBusinessExecutor = wsBusinessExecutor;
+        this.idempotencyService = idempotencyService;
+        this.outboxMapper = outboxMapper;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -99,7 +111,7 @@ import java.util.concurrent.Executor;
         ch.pipeline().addLast(new WsBusinessAuthHandler(channelUserManager));
         ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, socialFacade,
                 properties, groupPushDispatcher, messageFacade,
-                wsBusinessExecutor));
+                wsBusinessExecutor, idempotencyService, outboxMapper, objectMapper));
         ch.pipeline().addLast(new IdleEventHandler(channelUserManager));
     }
 }
