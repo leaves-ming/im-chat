@@ -1,4 +1,9 @@
 package com.ming.imchatserver.metrics;
+import io.micrometer.core.annotation.Timed;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -20,8 +25,10 @@ public class MetricsService {
     private static final String ACK_TYPE_DELIVERED = "DELIVERED";
     private static final String ACK_TYPE_ACKED = "ACKED";
 
+    // 原有原子指标
     private final AtomicLong outboxBacklog = new AtomicLong(0L);
     private final AtomicLong outboxProcessingBacklog = new AtomicLong(0L);
+    private final AtomicLong onlineUserCount = new AtomicLong(0L);
     private final AtomicLong relaySendTotal = new AtomicLong(0L);
     private final AtomicLong relayFailTotal = new AtomicLong(0L);
     private final AtomicLong groupPushAttemptTotal = new AtomicLong(0L);
@@ -33,45 +40,145 @@ public class MetricsService {
     private final SlidingWindowLatency deliveredLatencyWindow = new SlidingWindowLatency(4096);
     private final SlidingWindowLatency ackedLatencyWindow = new SlidingWindowLatency(4096);
 
-    public MetricsService() {
+    // Micrometer指标
+    private final Counter relaySendCounter;
+    private final Counter relayFailCounter;
+    private final Counter groupPushAttemptCounter;
+    private final Counter groupPushFailCounter;
+    private final Counter groupPushRejectCounter;
+    private final Counter sensitiveCheckCounter;
+    private final Counter sensitiveHitCounter;
+    private final Counter sensitiveReplaceCounter;
+    private final Counter outboxRetryCounter;
+    private final Counter websocketConnectCounter;
+    private final Counter websocketDisconnectCounter;
+    private final Timer deliveredLatencyTimer;
+    private final Timer ackedLatencyTimer;
+
+    public MetricsService(MeterRegistry meterRegistry) {
+        // Gauge指标
+        Gauge.builder("im_outbox_backlog", outboxBacklog, AtomicLong::get)
+                .description("Outbox待处理消息数")
+                .register(meterRegistry);
+        Gauge.builder("im_outbox_processing_backlog", outboxProcessingBacklog, AtomicLong::get)
+                .description("Outbox处理中消息数")
+                .register(meterRegistry);
+        Gauge.builder("im_online_users", onlineUserCount, AtomicLong::get)
+                .description("当前在线用户数")
+                .register(meterRegistry);
+        
+        // Counter指标
+        this.relaySendCounter = Counter.builder("im_relay_send_total")
+                .description("消息转发总次数")
+                .register(meterRegistry);
+        this.relayFailCounter = Counter.builder("im_relay_fail_total")
+                .description("消息转发失败次数")
+                .register(meterRegistry);
+        this.groupPushAttemptCounter = Counter.builder("im_group_push_attempt_total")
+                .description("群消息推送尝试次数")
+                .register(meterRegistry);
+        this.groupPushFailCounter = Counter.builder("im_group_push_fail_total")
+                .description("群消息推送失败次数")
+                .register(meterRegistry);
+        this.groupPushRejectCounter = Counter.builder("im_group_push_reject_total")
+                .description("群消息推送被拒绝次数")
+                .register(meterRegistry);
+        this.sensitiveCheckCounter = Counter.builder("im_sensitive_check_total")
+                .description("敏感词检查总次数")
+                .register(meterRegistry);
+        this.sensitiveHitCounter = Counter.builder("im_sensitive_hit_total")
+                .description("敏感词命中次数")
+                .register(meterRegistry);
+        this.sensitiveReplaceCounter = Counter.builder("im_sensitive_replace_total")
+                .description("敏感词替换次数")
+                .register(meterRegistry);
+        this.outboxRetryCounter = Counter.builder("im_outbox_retry_total")
+                .description("本地消息表重试次数")
+                .register(meterRegistry);
+        this.websocketConnectCounter = Counter.builder("im_websocket_connection_total")
+                .tag("type", "connect")
+                .description("WebSocket连接建立次数")
+                .register(meterRegistry);
+        this.websocketDisconnectCounter = Counter.builder("im_websocket_connection_total")
+                .tag("type", "disconnect")
+                .description("WebSocket连接断开次数")
+                .register(meterRegistry);
+        
+        // Timer指标
+        this.deliveredLatencyTimer = Timer.builder("im_message_push_latency_ms")
+                .tag("type", "delivered")
+                .description("消息送达延迟")
+                .register(meterRegistry);
+        this.ackedLatencyTimer = Timer.builder("im_message_push_latency_ms")
+                .tag("type", "acked")
+                .description("消息已读延迟")
+                .register(meterRegistry);
     }
 
     public void incrementRelaySend() {
         relaySendTotal.incrementAndGet();
+        relaySendCounter.increment();
     }
 
     public void incrementRelayFail() {
         relayFailTotal.incrementAndGet();
+        relayFailCounter.increment();
     }
 
     public void incrementGroupPushAttempt() {
         groupPushAttemptTotal.incrementAndGet();
+        groupPushAttemptCounter.increment();
     }
 
     public void incrementGroupPushAttempt(long delta) {
         if (delta > 0) {
             groupPushAttemptTotal.addAndGet(delta);
+            groupPushAttemptCounter.increment(delta);
         }
     }
 
     public void incrementGroupPushFail() {
         groupPushFailTotal.incrementAndGet();
+        groupPushFailCounter.increment();
     }
 
     public void incrementGroupPushReject() {
         groupPushRejectTotal.incrementAndGet();
+        groupPushRejectCounter.increment();
     }
 
     public void incrementSensitiveCheck() {
         sensitiveCheckTotal.incrementAndGet();
+        sensitiveCheckCounter.increment();
     }
 
     public void incrementSensitiveHit() {
         sensitiveHitTotal.incrementAndGet();
+        sensitiveHitCounter.increment();
     }
 
     public void incrementSensitiveReplace() {
         sensitiveReplaceTotal.incrementAndGet();
+        sensitiveReplaceCounter.increment();
+    }
+    
+    /**
+     * 新增Micrometer指标方法
+     */
+    public void incrementOutboxRetry() {
+        outboxRetryCounter.increment();
+    }
+    
+    public void incrementWebsocketConnect() {
+        websocketConnectCounter.increment();
+    }
+    
+    public void incrementWebsocketDisconnect() {
+        websocketDisconnectCounter.increment();
+    }
+    
+    public void setOnlineUserCount(long count) {
+        onlineUserCount.set(count);
     }
 
     /**
@@ -86,10 +193,12 @@ public class MetricsService {
         long latencyMs = ackAtMs - createdAtMs;
         if (ACK_TYPE_ACKED.equalsIgnoreCase(ackType)) {
             ackedLatencyWindow.record(latencyMs);
+            ackedLatencyTimer.record(latencyMs, java.util.concurrent.TimeUnit.MILLISECONDS);
             return;
         }
         if (ACK_TYPE_DELIVERED.equalsIgnoreCase(ackType)) {
             deliveredLatencyWindow.record(latencyMs);
+            deliveredLatencyTimer.record(latencyMs, java.util.concurrent.TimeUnit.MILLISECONDS);
         }
     }
 
