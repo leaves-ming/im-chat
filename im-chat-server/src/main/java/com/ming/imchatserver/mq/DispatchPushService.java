@@ -39,28 +39,39 @@ public class DispatchPushService {
     private static final Logger logger = LoggerFactory.getLogger(DispatchPushService.class);
     private static final int GROUP_STATUS_RETRACTED = 2;
 
-    private final ChannelUserManager channelUserManager;
-    private final GroupMessageQueryPort groupMessageQueryPort;
-    private final RemoteGroupService groupService;
-    private final RedisStateProperties redisStateProperties;
-    private final ObjectMapper mapper = new ObjectMapper();
+    private ChannelUserManager channelUserManager;
+    private GroupMessageQueryPort groupMessageQueryPort;
+    private RemoteGroupService groupService;
+    private RedisStateProperties redisStateProperties;
+    private ObjectMapper mapper;
 
     @Autowired
     public DispatchPushService(ChannelUserManager channelUserManager,
                                GroupMessageQueryPort groupMessageQueryPort,
                                RemoteGroupService groupService,
-                               RedisStateProperties redisStateProperties) {
+                               RedisStateProperties redisStateProperties,
+                               ObjectMapper mapper) {
         this.channelUserManager = channelUserManager;
         this.groupMessageQueryPort = groupMessageQueryPort;
         this.groupService = groupService;
         this.redisStateProperties = redisStateProperties;
+        this.mapper = mapper;
     }
 
     /**
      * 供精简场景或测试使用的构造器。
      */
-    public DispatchPushService(ChannelUserManager channelUserManager) {
+    public DispatchPushService(ChannelUserManager channelUserManager, ChannelUserManager channelUserManager1, GroupMessageQueryPort groupMessageQueryPort, RemoteGroupService groupService, RedisStateProperties redisStateProperties, ObjectMapper mapper) {
         this(channelUserManager, null, null, null);
+        this.channelUserManager = channelUserManager1;
+        this.groupMessageQueryPort = groupMessageQueryPort;
+        this.groupService = groupService;
+        this.redisStateProperties = redisStateProperties;
+        this.mapper = mapper;
+    }
+
+    public DispatchPushService(ChannelUserManager channelUserManager, Object o, Object o1, Object o2) {
+
     }
 
     /**

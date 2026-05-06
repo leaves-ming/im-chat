@@ -26,15 +26,17 @@ public class OutboxRetryJob {
 
     private final OutboxMapper outboxMapper;
     private final ChannelUserManager channelUserManager;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper;
     private final RedissonClient redissonClient;
 
     public OutboxRetryJob(OutboxMapper outboxMapper,
                           ChannelUserManager channelUserManager,
-                          RedissonClient redissonClient) {
+                          RedissonClient redissonClient,
+                          ObjectMapper objectMapper) {
         this.outboxMapper = outboxMapper;
         this.channelUserManager = channelUserManager;
         this.redissonClient = redissonClient;
+        this.objectMapper = objectMapper;
     }
 
     /**

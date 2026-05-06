@@ -101,14 +101,14 @@ import java.util.concurrent.Executor;
         // 先处理 REST 请求（如 /api/auth/login），非 REST 请求交由后续处理
         ch.pipeline().addLast(new HttpRequestHandler(properties, authService, metricsService,
                 rateLimitService, rateLimitProperties,
-                runtimeObservabilitySettings, healthEndpoint, instanceProperties));
+                runtimeObservabilitySettings, healthEndpoint, instanceProperties, objectMapper));
 
         // 握手认证必须在 WebSocketServerProtocolHandler 之前完成。
         // gateway 转发的内部路径会在握手认证阶段重写回外部标准路径。
-        ch.pipeline().addLast(new WebSocketHandshakeAuthHandler(properties, authService, channelUserManager, runtimeObservabilitySettings));
+        ch.pipeline().addLast(new WebSocketHandshakeAuthHandler(properties, authService, channelUserManager, runtimeObservabilitySettings, objectMapper));
         ch.pipeline().addLast(new WebSocketServerProtocolHandler(properties.getWebsocketPath(), null, true, properties.getMaxContentLength()));
         // 业务帧鉴权（要求 channel 已绑定 userId）
-        ch.pipeline().addLast(new WsBusinessAuthHandler(channelUserManager));
+        ch.pipeline().addLast(new WsBusinessAuthHandler(channelUserManager, objectMapper));
         ch.pipeline().addLast(new WebSocketFrameHandler(channelUserManager, socialFacade,
                 properties, groupPushDispatcher, messageFacade,
                 wsBusinessExecutor, idempotencyService, outboxMapper, objectMapper));

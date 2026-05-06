@@ -36,20 +36,22 @@ public class NettyGroupPushDispatcher implements GroupPushDispatcher {
     private final GroupPushCoordinator groupPushCoordinator;
     private final MetricsService metricsService;
     private final NettyProperties nettyProperties;
-    private final ObjectMapper mapper = new ObjectMapper();
+    private final ObjectMapper mapper;
 
     public NettyGroupPushDispatcher(RemoteGroupService groupService,
                                     ChannelUserManager channelUserManager,
                                     @Qualifier("groupPushExecutor") Executor groupPushExecutor,
                                     GroupPushCoordinator groupPushCoordinator,
                                     MetricsService metricsService,
-                                    NettyProperties nettyProperties) {
+                                    NettyProperties nettyProperties,
+                                    ObjectMapper mapper) {
         this.groupService = groupService;
         this.channelUserManager = channelUserManager;
         this.groupPushExecutor = groupPushExecutor;
         this.groupPushCoordinator = groupPushCoordinator;
         this.metricsService = metricsService;
         this.nettyProperties = nettyProperties;
+        this.mapper = mapper;
     }
 
     @Override

@@ -1,6 +1,5 @@
 package com.ming.imchatserver.netty;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ming.imchatserver.config.InstanceProperties;
@@ -12,7 +11,6 @@ import com.ming.imchatserver.observability.RuntimeObservabilitySettings;
 import com.ming.imchatserver.observability.TraceContextSupport;
 import com.ming.imchatserver.service.AuthService;
 import com.ming.imchatserver.service.RateLimitService;
-import io.netty.buffer.ByteBufInputStream;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
@@ -48,7 +46,7 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
     private final RuntimeObservabilitySettings runtimeObservabilitySettings;
     private final HealthEndpoint healthEndpoint;
     private final InstanceProperties instanceProperties;
-    private final ObjectMapper mapper = new ObjectMapper();
+    private final ObjectMapper mapper;
 
     public HttpRequestHandler(NettyProperties properties,
                               AuthService authService,
@@ -57,7 +55,8 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
                               RateLimitProperties rateLimitProperties,
                               RuntimeObservabilitySettings runtimeObservabilitySettings,
                               HealthEndpoint healthEndpoint,
-                              InstanceProperties instanceProperties) {
+                              InstanceProperties instanceProperties,
+                              ObjectMapper mapper) {
         this.properties = properties;
         this.authService = authService;
         this.metricsService = metricsService;
@@ -66,19 +65,22 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<FullHttpRequ
         this.runtimeObservabilitySettings = runtimeObservabilitySettings;
         this.healthEndpoint = healthEndpoint;
         this.instanceProperties = instanceProperties;
-    }
-
-    public HttpRequestHandler(NettyProperties properties,
-                              AuthService authService,
-                              MetricsService metricsService) {
-        this(properties, authService, metricsService, null, null, null, null, null);
+        this.mapper = mapper;
     }
 
     /**
      * 单元测试兼容构造函数。
      */
-    public HttpRequestHandler(NettyProperties properties, AuthService authService) {
-        this(properties, authService, null, null, null, null, null, null);
+    public HttpRequestHandler(NettyProperties properties,
+                              AuthService authService,
+                              MetricsService metricsService,
+                              RateLimitService rateLimitService,
+                              RateLimitProperties rateLimitProperties,
+                              RuntimeObservabilitySettings runtimeObservabilitySettings,
+                              HealthEndpoint healthEndpoint,
+                              InstanceProperties instanceProperties) {
+        this(properties, authService, metricsService, rateLimitService, rateLimitProperties,
+                runtimeObservabilitySettings, healthEndpoint, instanceProperties, new ObjectMapper());
     }
 
     @Override

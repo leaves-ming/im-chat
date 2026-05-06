@@ -19,14 +19,16 @@ import org.slf4j.LoggerFactory;
     public class WsBusinessAuthHandler extends ChannelInboundHandlerAdapter {
 
     private static final Logger logger = LoggerFactory.getLogger(WsBusinessAuthHandler.class);
-    private final ObjectMapper mapper = new ObjectMapper();
+    private final ObjectMapper mapper;
     private final ChannelUserManager channelUserManager;
     /**
      * @param channelUserManager 在线连接映射管理器，用于异常日志补充上下文
      */
     
-    public WsBusinessAuthHandler(ChannelUserManager channelUserManager) {
+    public WsBusinessAuthHandler(ChannelUserManager channelUserManager,
+                                 ObjectMapper mapper) {
         this.channelUserManager = channelUserManager;
+        this.mapper = mapper;
     }
 
     @Override

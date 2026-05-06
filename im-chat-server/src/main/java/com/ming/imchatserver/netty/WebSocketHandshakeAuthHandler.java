@@ -40,7 +40,7 @@ import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
     private final AuthService authService;
     private final ChannelUserManager channelUserManager;
     private final RuntimeObservabilitySettings runtimeObservabilitySettings;
-    private final ObjectMapper mapper = new ObjectMapper();
+    private final ObjectMapper mapper;
     /**
      * @param properties          Netty 配置（ws 路径、origin 白名单等）
      * @param authService         token 验证与解析服务
@@ -50,11 +50,13 @@ import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
     public WebSocketHandshakeAuthHandler(NettyProperties properties,
                                          AuthService authService,
                                          ChannelUserManager channelUserManager,
-                                         RuntimeObservabilitySettings runtimeObservabilitySettings) {
+                                         RuntimeObservabilitySettings runtimeObservabilitySettings,
+                                         ObjectMapper mapper) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
         this.runtimeObservabilitySettings = runtimeObservabilitySettings;
+        this.mapper = mapper;
     }
 
     @Override
