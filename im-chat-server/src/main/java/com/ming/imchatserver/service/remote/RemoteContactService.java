@@ -1,5 +1,6 @@
 package com.ming.imchatserver.service.remote;
 
+import com.ming.common.remote.RemoteCallTemplate;
 import com.ming.imapicontract.common.ApiResponse;
 import com.ming.imapicontract.social.CheckContactActiveRequest;
 import com.ming.imapicontract.social.ContactItemDTO;
@@ -28,6 +29,8 @@ import java.util.List;
 @Component
 public class RemoteContactService {
 
+    private static final String SERVICE_NAME = "social-service";
+
     private final SocialServiceClient socialServiceClient;
     private final SocialCacheSupport socialCacheSupport;
     private final SocialRouteProperties socialRouteProperties;
@@ -41,22 +44,22 @@ public class RemoteContactService {
     }
 
     public ContactOperationResult addOrActivateContact(Long ownerUserId, Long peerUserId) {
-        ContactOperateResponse response = unwrap(call(() ->
-                socialServiceClient.addContact(new ContactOperateRequest(ownerUserId, peerUserId))));
+        ContactOperateResponse response = RemoteCallTemplate.execute(() ->
+                socialServiceClient.addContact(new ContactOperateRequest(ownerUserId, peerUserId)), SERVICE_NAME);
         socialCacheSupport.invalidateContactPair(ownerUserId, peerUserId);
         return new ContactOperationResult(response.success(), response.idempotent());
     }
 
     public ContactOperationResult removeOrDeactivateContact(Long ownerUserId, Long peerUserId) {
-        ContactOperateResponse response = unwrap(call(() ->
-                socialServiceClient.removeContact(new ContactOperateRequest(ownerUserId, peerUserId))));
+        ContactOperateResponse response = RemoteCallTemplate.execute(() ->
+                socialServiceClient.removeContact(new ContactOperateRequest(ownerUserId, peerUserId)), SERVICE_NAME);
         socialCacheSupport.invalidateContactPair(ownerUserId, peerUserId);
         return new ContactOperationResult(response.success(), response.idempotent());
     }
 
     public ContactPage listActiveContacts(Long ownerUserId, Long cursorPeerUserId, Integer limit) {
-        ContactListResponse response = unwrap(call(() ->
-                socialServiceClient.listContacts(new ContactListRequest(ownerUserId, cursorPeerUserId, limit))));
+        ContactListResponse response = RemoteCallTemplate.execute(() ->
+                socialServiceClient.listContacts(new ContactListRequest(ownerUserId, cursorPeerUserId, limit)), SERVICE_NAME);
         List<ContactView> items = new ArrayList<>();
         for (ContactItemDTO item : response.items()) {
             items.add(new ContactView(
@@ -77,17 +80,15 @@ public class RemoteContactService {
         if (cached != null) {
             return cached;
         }
-        ApiResponse<com.ming.imapicontract.social.CheckContactActiveResponse> response = call(() ->
-                socialServiceClient.checkContactActive(new CheckContactActiveRequest(ownerUserId, peerUserId)));
-        if (response != null && response.isSuccess()) {
-            boolean active = response.getData() != null && response.getData().active();
+        try {
+            com.ming.imapicontract.social.CheckContactActiveResponse response = RemoteCallTemplate.execute(() ->
+                    socialServiceClient.checkContactActive(new CheckContactActiveRequest(ownerUserId, peerUserId)), SERVICE_NAME);
+            boolean active = response != null && response.active();
             socialCacheSupport.putContactActive(ownerUserId, peerUserId, active, contactActiveCacheTtlMillis());
             return active;
+        } catch (Exception e) {
+            return false;
         }
-        if (isRemoteUnavailable(response)) {
-            throw new SocialRpcException("REMOTE_UNAVAILABLE", messageOf(response, "contact active check unavailable"));
-        }
-        return false;
     }
 
     public boolean isSingleChatAllowed(Long fromUserId, Long toUserId) {
@@ -95,60 +96,15 @@ public class RemoteContactService {
         if (cached != null) {
             return cached;
         }
-        ApiResponse<ValidateSingleChatPermissionResponse> response = call(() ->
-                socialServiceClient.validateSingleChatPermission(new ValidateSingleChatPermissionRequest(fromUserId, toUserId)));
-        if (response != null && response.isSuccess()) {
-            boolean allowed = response.getData() != null && response.getData().allowed();
+        try {
+            ValidateSingleChatPermissionResponse response = RemoteCallTemplate.execute(() ->
+                    socialServiceClient.validateSingleChatPermission(new ValidateSingleChatPermissionRequest(fromUserId, toUserId)), SERVICE_NAME);
+            boolean allowed = response != null && response.allowed();
             socialCacheSupport.putSingleChatPermission(fromUserId, toUserId, allowed, singleChatPermissionCacheTtlMillis());
             return allowed;
+        } catch (Exception e) {
+            return false;
         }
-        if (isRemoteUnavailable(response)) {
-            throw new SocialRpcException("REMOTE_UNAVAILABLE", messageOf(response, "single chat permission unavailable"));
-        }
-        return false;
-    }
-
-    private <T> T unwrap(ApiResponse<T> response) {
-        if (response == null) {
-            throw new SocialRpcException("REMOTE_UNAVAILABLE", "social service response is null");
-        }
-        if (response.isSuccess()) {
-            return response.getData();
-        }
-        throw mapToException(response);
-    }
-
-    private RuntimeException mapToException(ApiResponse<?> response) {
-        String code = response == null ? "REMOTE_UNAVAILABLE" : response.getCode();
-        String message = messageOf(response, "social service call failed");
-        if ("FORBIDDEN".equals(code)) {
-            return new SecurityException(message);
-        }
-        if ("INVALID_PARAM".equals(code)) {
-            return new IllegalArgumentException(message);
-        }
-        if ("REMOTE_UNAVAILABLE".equals(code)) {
-            return new SocialRpcException(code, message);
-        }
-        return new SocialRpcException(code == null ? "REMOTE_ERROR" : code, message);
-    }
-
-    private boolean isRemoteUnavailable(ApiResponse<?> response) {
-        return response == null || "REMOTE_UNAVAILABLE".equals(response.getCode());
-    }
-
-    private <T> ApiResponse<T> call(SocialCall<T> socialCall) {
-        try {
-            return socialCall.execute();
-        } catch (RuntimeException ex) {
-            throw new SocialRpcException("REMOTE_UNAVAILABLE", ex.getMessage());
-        }
-    }
-
-    private String messageOf(ApiResponse<?> response, String fallback) {
-        return response == null || response.getMessage() == null || response.getMessage().isBlank()
-                ? fallback
-                : response.getMessage();
     }
 
     private long singleChatPermissionCacheTtlMillis() {
@@ -158,9 +114,5 @@ public class RemoteContactService {
     private long contactActiveCacheTtlMillis() {
         return Duration.ofSeconds(Math.max(1, socialRouteProperties.getContactActiveCacheTtlSeconds())).toMillis();
     }
-
-    @FunctionalInterface
-    private interface SocialCall<T> {
-        ApiResponse<T> execute();
-    }
 }
+

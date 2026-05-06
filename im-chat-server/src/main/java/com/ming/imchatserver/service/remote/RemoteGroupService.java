@@ -1,5 +1,7 @@
 package com.ming.imchatserver.service.remote;
 
+import com.ming.common.remote.RemoteCallException;
+import com.ming.common.remote.RemoteCallTemplate;
 import com.ming.imapicontract.common.ApiResponse;
 import com.ming.imapicontract.social.CheckGroupRecallPermissionRequest;
 import com.ming.imapicontract.social.CheckGroupRecallPermissionResponse;
@@ -36,6 +38,8 @@ import java.util.List;
 @Component
 public class RemoteGroupService {
 
+    private static final String SERVICE_NAME = "social-service";
+
     private final SocialServiceClient socialServiceClient;
     private final SocialCacheSupport socialCacheSupport;
     private final SocialRouteProperties socialRouteProperties;
@@ -52,32 +56,29 @@ public class RemoteGroupService {
     }
 
     public CreateGroupResult createGroup(Long ownerUserId, String name, Integer memberLimit) {
-        GroupCreateResponse response = unwrap(call(() ->
-                socialServiceClient.createGroup(new GroupCreateRequest(ownerUserId, name, memberLimit))));
-        if (response == null) {
-            throw new SocialRpcException("REMOTE_UNAVAILABLE", "social service response is null");
-        }
+        GroupCreateResponse response = RemoteCallTemplate.execute(() ->
+                socialServiceClient.createGroup(new GroupCreateRequest(ownerUserId, name, memberLimit)), SERVICE_NAME);
         socialCacheSupport.invalidateGroup(response.groupId());
         return new CreateGroupResult(response.groupId(), response.groupNo());
     }
 
     public GroupJoinResult joinGroup(Long groupId, Long userId) {
-        GroupJoinResponse response = unwrap(call(() ->
-                socialServiceClient.joinGroup(new GroupJoinRequest(groupId, userId))));
+        GroupJoinResponse response = RemoteCallTemplate.execute(() ->
+                socialServiceClient.joinGroup(new GroupJoinRequest(groupId, userId)), SERVICE_NAME);
         socialCacheSupport.invalidateGroup(groupId);
         return new GroupJoinResult(response.joined(), response.idempotent());
     }
 
     public GroupQuitResult quitGroup(Long groupId, Long userId) {
-        GroupQuitResponse response = unwrap(call(() ->
-                socialServiceClient.quitGroup(new GroupQuitRequest(groupId, userId))));
+        GroupQuitResponse response = RemoteCallTemplate.execute(() ->
+                socialServiceClient.quitGroup(new GroupQuitRequest(groupId, userId)), SERVICE_NAME);
         socialCacheSupport.invalidateGroup(groupId);
         return new GroupQuitResult(response.quit(), response.idempotent());
     }
 
     public GroupMemberPage listMembers(Long groupId, Long cursorUserId, Integer limit) {
-        GroupMemberListResponse response = unwrap(call(() ->
-                socialServiceClient.listGroupMembers(new GroupMemberListRequest(groupId, cursorUserId, limit))));
+        GroupMemberListResponse response = RemoteCallTemplate.execute(() ->
+                socialServiceClient.listGroupMembers(new GroupMemberListRequest(groupId, cursorUserId, limit)), SERVICE_NAME);
         List<GroupMemberView> items = new ArrayList<>();
         for (GroupMemberDTO item : response.items()) {
             items.add(toGroupMemberView(item));
@@ -95,19 +96,20 @@ public class RemoteGroupService {
         if (cached != null) {
             return cached;
         }
-        ApiResponse<CheckGroupRecallPermissionResponse> response = call(() ->
-                socialServiceClient.checkGroupRecallPermission(
-                        new CheckGroupRecallPermissionRequest(groupId, operatorUserId, targetUserId)));
-        if (response != null && response.isSuccess()) {
-            boolean allowed = response.getData() != null && response.getData().allowed();
+        try {
+            CheckGroupRecallPermissionResponse response = RemoteCallTemplate.execute(() ->
+                    socialServiceClient.checkGroupRecallPermission(
+                            new CheckGroupRecallPermissionRequest(groupId, operatorUserId, targetUserId)), SERVICE_NAME);
+            boolean allowed = response != null && response.allowed();
             socialCacheSupport.putGroupRecallPermission(
                     groupId, operatorUserId, targetUserId, allowed, groupRecallPermissionCacheTtlMillis());
             return allowed;
+        } catch (RemoteCallException e) {
+            if ("REMOTE_UNAVAILABLE".equals(e.getCode())) {
+                throw new SocialRpcException(e.getCode(), e.getMessage());
+            }
+            throw mapGroupException(e);
         }
-        if (isRemoteUnavailable(response)) {
-            throw new SocialRpcException("REMOTE_UNAVAILABLE", messageOf(response, "group recall permission unavailable"));
-        }
-        throw mapToException(response);
     }
 
     public List<Long> listActiveMemberUserIds(Long groupId) {
@@ -119,24 +121,24 @@ public class RemoteGroupService {
         if (cached != null) {
             return cached;
         }
-        ApiResponse<GetGroupMemberIdsResponse> response = call(() ->
-                socialServiceClient.getGroupMemberIds(new GetGroupMemberIdsRequest(groupId)));
-        if (response != null && response.isSuccess()) {
-            List<Long> ids = response.getData() == null || response.getData().memberUserIds() == null
+        try {
+            GetGroupMemberIdsResponse response = RemoteCallTemplate.execute(() ->
+                    socialServiceClient.getGroupMemberIds(new GetGroupMemberIdsRequest(groupId)), SERVICE_NAME);
+            List<Long> ids = response == null || response.memberUserIds() == null
                     ? List.of()
-                    : response.getData().memberUserIds();
+                    : response.memberUserIds();
             socialCacheSupport.putGroupMemberIds(groupId, ids, groupMemberIdsCacheTtlMillis());
             return ids;
-        }
-        if (tolerant) {
-            if (isRemoteUnavailable(response)) {
-                return List.of();
+        } catch (RemoteCallException e) {
+            if (tolerant) {
+                if ("REMOTE_UNAVAILABLE".equals(e.getCode())
+                        || "GROUP_NOT_FOUND".equals(e.getCode())
+                        || "GROUP_NOT_ACTIVE".equals(e.getCode())) {
+                    return List.of();
+                }
             }
-            if (response != null && ("GROUP_NOT_FOUND".equals(response.getCode()) || "GROUP_NOT_ACTIVE".equals(response.getCode()))) {
-                return List.of();
-            }
+            throw mapGroupException(e);
         }
-        throw mapToException(response);
     }
 
     private GroupMemberView toGroupMemberView(GroupMemberDTO item) {
@@ -152,59 +154,25 @@ public class RemoteGroupService {
         );
     }
 
-    private <T> T unwrap(ApiResponse<T> response) {
-        if (response == null) {
-            throw new SocialRpcException("REMOTE_UNAVAILABLE", "social service response is null");
+    private RuntimeException mapGroupException(RemoteCallException e) {
+        switch (e.getCode()) {
+            case "GROUP_NOT_FOUND":
+                return new GroupBizException(GroupErrorCode.GROUP_NOT_FOUND, e.getMessage());
+            case "GROUP_NOT_ACTIVE":
+                return new GroupBizException(GroupErrorCode.GROUP_NOT_ACTIVE, e.getMessage());
+            case "GROUP_FULL":
+                return new GroupBizException(GroupErrorCode.GROUP_FULL, e.getMessage());
+            case "OWNER_CANNOT_QUIT":
+                return new GroupBizException(GroupErrorCode.OWNER_CANNOT_QUIT, e.getMessage());
+            case "REMOTE_UNAVAILABLE":
+                return new SocialRpcException(e.getCode(), e.getMessage());
+            case "FORBIDDEN":
+                return new SecurityException(e.getMessage());
+            case "INVALID_PARAM":
+                return new IllegalArgumentException(e.getMessage());
+            default:
+                return new SocialRpcException(e.getCode() == null ? "REMOTE_ERROR" : e.getCode(), e.getMessage());
         }
-        if (response.isSuccess()) {
-            return response.getData();
-        }
-        throw mapToException(response);
-    }
-
-    private RuntimeException mapToException(ApiResponse<?> response) {
-        String code = response == null ? "REMOTE_UNAVAILABLE" : response.getCode();
-        String message = messageOf(response, "social service call failed");
-        if ("INVALID_PARAM".equals(code)) {
-            return new IllegalArgumentException(message);
-        }
-        if ("GROUP_NOT_FOUND".equals(code)) {
-            return new GroupBizException(GroupErrorCode.GROUP_NOT_FOUND, message);
-        }
-        if ("GROUP_NOT_ACTIVE".equals(code)) {
-            return new GroupBizException(GroupErrorCode.GROUP_NOT_ACTIVE, message);
-        }
-        if ("GROUP_FULL".equals(code)) {
-            return new GroupBizException(GroupErrorCode.GROUP_FULL, message);
-        }
-        if ("OWNER_CANNOT_QUIT".equals(code)) {
-            return new GroupBizException(GroupErrorCode.OWNER_CANNOT_QUIT, message);
-        }
-        if ("REMOTE_UNAVAILABLE".equals(code)) {
-            return new SocialRpcException(code, message);
-        }
-        if ("FORBIDDEN".equals(code)) {
-            return new SecurityException(message);
-        }
-        return new SocialRpcException(code == null ? "REMOTE_ERROR" : code, message);
-    }
-
-    private boolean isRemoteUnavailable(ApiResponse<?> response) {
-        return response == null || "REMOTE_UNAVAILABLE".equals(response.getCode());
-    }
-
-    private <T> ApiResponse<T> call(SocialCall<T> socialCall) {
-        try {
-            return socialCall.execute();
-        } catch (RuntimeException ex) {
-            throw new SocialRpcException("REMOTE_UNAVAILABLE", ex.getMessage());
-        }
-    }
-
-    private String messageOf(ApiResponse<?> response, String fallback) {
-        return response == null || response.getMessage() == null || response.getMessage().isBlank()
-                ? fallback
-                : response.getMessage();
     }
 
     private long groupMemberIdsCacheTtlMillis() {
@@ -213,10 +181,5 @@ public class RemoteGroupService {
 
     private long groupRecallPermissionCacheTtlMillis() {
         return Duration.ofSeconds(Math.max(1, socialRouteProperties.getGroupRecallPermissionCacheTtlSeconds())).toMillis();
-    }
-
-    @FunctionalInterface
-    private interface SocialCall<T> {
-        ApiResponse<T> execute();
     }
 }
