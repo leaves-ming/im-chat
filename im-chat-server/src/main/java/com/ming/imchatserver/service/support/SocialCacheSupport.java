@@ -2,6 +2,10 @@ package com.ming.imchatserver.service.support;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.stats.CacheStats;
+import com.ming.imchatserver.config.CacheProperties;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -15,28 +19,65 @@ import java.util.concurrent.TimeUnit;
 @Component
 public class SocialCacheSupport {
 
-    // 每个缓存最大容量10000条，LRU自动淘汰
-    private static final int MAX_CACHE_SIZE = 10000;
-    
-    private final Cache<ContactActiveKey, Boolean> contactActiveCache = Caffeine.newBuilder()
-            .maximumSize(MAX_CACHE_SIZE)
-            .expireAfterWrite(5, TimeUnit.MINUTES)
-            .build();
-    
-    private final Cache<SingleChatPermissionKey, Boolean> singleChatPermissionCache = Caffeine.newBuilder()
-            .maximumSize(MAX_CACHE_SIZE)
-            .expireAfterWrite(5, TimeUnit.MINUTES)
-            .build();
-    
-    private final Cache<Long, List<Long>> groupMemberIdsCache = Caffeine.newBuilder()
-            .maximumSize(MAX_CACHE_SIZE)
-            .expireAfterWrite(3, TimeUnit.MINUTES)
-            .build();
-    
-    private final Cache<GroupRecallPermissionKey, Boolean> groupRecallPermissionCache = Caffeine.newBuilder()
-            .maximumSize(MAX_CACHE_SIZE)
-            .expireAfterWrite(10, TimeUnit.MINUTES)
-            .build();
+    private final Cache<ContactActiveKey, Boolean> contactActiveCache;
+    private final Cache<SingleChatPermissionKey, Boolean> singleChatPermissionCache;
+    private final Cache<Long, List<Long>> groupMemberIdsCache;
+    private final Cache<GroupRecallPermissionKey, Boolean> groupRecallPermissionCache;
+    private final MeterRegistry meterRegistry;
+
+    public SocialCacheSupport(CacheProperties cacheProperties, MeterRegistry meterRegistry) {
+        this.meterRegistry = meterRegistry;
+        CacheProperties.CacheConfig contactActiveConfig = cacheProperties.getContactActive();
+        this.contactActiveCache = Caffeine.newBuilder()
+                .maximumSize(contactActiveConfig.getMaxSize())
+                .expireAfterWrite(contactActiveConfig.getExpire(), contactActiveConfig.getTimeUnit())
+                .recordStats()
+                .build();
+        bindCacheMetrics("contact_active_cache", contactActiveCache);
+
+        CacheProperties.CacheConfig singleChatConfig = cacheProperties.getSingleChatPermission();
+        this.singleChatPermissionCache = Caffeine.newBuilder()
+                .maximumSize(singleChatConfig.getMaxSize())
+                .expireAfterWrite(singleChatConfig.getExpire(), singleChatConfig.getTimeUnit())
+                .recordStats()
+                .build();
+        bindCacheMetrics("single_chat_permission_cache", singleChatPermissionCache);
+
+        CacheProperties.CacheConfig groupMemberConfig = cacheProperties.getGroupMemberIds();
+        this.groupMemberIdsCache = Caffeine.newBuilder()
+                .maximumSize(groupMemberConfig.getMaxSize())
+                .expireAfterWrite(groupMemberConfig.getExpire(), groupMemberConfig.getTimeUnit())
+                .recordStats()
+                .build();
+        bindCacheMetrics("group_member_ids_cache", groupMemberIdsCache);
+
+        CacheProperties.CacheConfig recallConfig = cacheProperties.getGroupRecallPermission();
+        this.groupRecallPermissionCache = Caffeine.newBuilder()
+                .maximumSize(recallConfig.getMaxSize())
+                .expireAfterWrite(recallConfig.getExpire(), recallConfig.getTimeUnit())
+                .recordStats()
+                .build();
+        bindCacheMetrics("group_recall_permission_cache", groupRecallPermissionCache);
+    }
+
+    /**
+     * 绑定缓存Metrics到Prometheus
+     */
+    private <K, V> void bindCacheMetrics(String name, Cache<K, V> cache) {
+        CacheStats stats = cache.stats();
+        Gauge.builder(name + "_hit_rate", stats, CacheStats::hitRate)
+                .description("缓存命中率")
+                .register(meterRegistry);
+        Gauge.builder(name + "_eviction_count", stats, CacheStats::evictionCount)
+                .description("缓存驱逐次数")
+                .register(meterRegistry);
+        Gauge.builder(name + "_size", cache, Cache::estimatedSize)
+                .description("缓存当前大小")
+                .register(meterRegistry);
+        Gauge.builder(name + "_miss_count", stats, CacheStats::missCount)
+                .description("缓存未命中次数")
+                .register(meterRegistry);
+    }
 
     public Boolean getContactActive(Long ownerUserId, Long peerUserId) {
         return contactActiveCache.getIfPresent(new ContactActiveKey(ownerUserId, peerUserId));
