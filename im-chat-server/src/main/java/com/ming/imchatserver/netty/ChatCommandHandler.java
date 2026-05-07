@@ -73,18 +73,12 @@ public class ChatCommandHandler implements WsCommandHandler {
     }
 
     private void handleChat(WsCommandContext context) throws Exception {
-        Long fromUserId = context.userId();
-        if (fromUserId == null) {
-            throw new UnauthorizedWsException("user not bound");
-        }
+        Long fromUserId = WsCommandHelper.requireUser(context);
         JsonNode node = context.payload();
-        long targetUserId = node.path("targetUserId").asLong(0L);
-        if (targetUserId <= 0) {
-            throw new IllegalArgumentException("targetUserId must be greater than 0");
-        }
+        long targetUserId = WsCommandHelper.positiveTargetUserId(node);
         String msgType = MessageContentCodec.normalizeMsgType(node.path("msgType").asText(null));
         String content = MessageContentCodec.validateAndSerializeIncomingContent(msgType, node.get("content"));
-        String clientMsgId = normalizeClientMsgId(node.path("clientMsgId").asText(null));
+        String clientMsgId = WsCommandHelper.normalizeClientMsgId(node.path("clientMsgId").asText(null));
         if (nettyProperties.isSingleChatRequireActiveContact() && !socialFacade.isSingleChatAllowed(fromUserId, targetUserId)) {
             throw new SecurityException("single chat requires active bilateral contacts");
         }
@@ -145,6 +139,76 @@ public class ChatCommandHandler implements WsCommandHandler {
         protocolSupport.sendJson(context.channel(), ack);
     }
 
+    private void handlePullOffline(WsCommandContext context) throws Exception {
+        Long userId = WsCommandHelper.requireUser(context);
+        String deviceId = protocolSupport.currentDeviceId(context.channel());
+        JsonNode node = context.payload();
+        int limit = node.has("limit") ? node.get("limit").asInt(nettyProperties.getSyncBatchSize()) : nettyProperties.getSyncBatchSize();
+        int maxLimit = nettyProperties.getOfflinePullMaxLimit() > 0 ? nettyProperties.getOfflinePullMaxLimit() : DEFAULT_PULL_MAX_LIMIT;
+        WsCommandHelper.validateLimit(limit, 1, maxLimit);
+        SingleSyncCursor syncCursor = parseSingleSyncCursor(node, deviceId);
+        if (syncCursor == INVALID_SINGLE_SYNC_CURSOR) {
+            return;
+        }
+        SingleMessagePage pageResult = messageFacade.pullOffline(userId, deviceId, syncCursor, limit);
+        ObjectNode resp = protocolSupport.mapper().createObjectNode();
+        resp.put("type", "PULL_OFFLINE_RESULT");
+        resp.put("hasMore", pageResult.hasMore());
+        protocolSupport.writeSingleSyncProgress(resp, deviceId, pageResult.nextCursorCreatedAt(), pageResult.nextCursorId());
+        ArrayNode arr = protocolSupport.mapper().createArrayNode();
+        for (SingleMessageView message : pageResult.messages()) {
+            ObjectNode item = protocolSupport.mapper().createObjectNode();
+            protocolSupport.writeSingleMessageNode(item, message);
+            arr.add(item);
+        }
+        resp.set("messages", arr);
+        context.channel().writeAndFlush(new io.netty.handler.codec.http.websocketx.TextWebSocketFrame(protocolSupport.mapper().writeValueAsString(resp)))
+                .addListener(future -> {
+                    if (future.isSuccess()) {
+                        messageFacade.advanceSyncCursor(userId, deviceId, pageResult);
+                    }
+                });
+    }
+
+    private SingleSyncCursor parseSingleSyncCursor(JsonNode node, String currentDeviceId) {
+        JsonNode syncToken = node.get("syncToken");
+        String cursorCreatedAtStr;
+        Long cursorId;
+        if (syncToken != null && !syncToken.isNull()) {
+            if (!syncToken.isObject()) {
+                throw new IllegalArgumentException("syncToken must be an object");
+            }
+            String chatType = WsCommandHelper.textValue(syncToken.get("chatType"));
+            if (chatType != null && !"SINGLE".equalsIgnoreCase(chatType)) {
+                throw new IllegalArgumentException("syncToken.chatType must be SINGLE");
+            }
+            String tokenDeviceId = WsCommandHelper.textValue(syncToken.get("deviceId"));
+            if (tokenDeviceId != null && currentDeviceId != null && !tokenDeviceId.equals(currentDeviceId)) {
+                throw new IllegalArgumentException("syncToken.deviceId must match current device");
+            }
+            cursorCreatedAtStr = WsCommandHelper.textValue(syncToken.get("cursorCreatedAt"));
+            cursorId = WsCommandHelper.longValue(syncToken.get("cursorId"));
+        } else {
+            cursorCreatedAtStr = WsCommandHelper.textValue(node.get("cursorCreatedAt"));
+            cursorId = WsCommandHelper.longValue(node.get("cursorId"));
+        }
+        boolean hasCursorCreatedAt = cursorCreatedAtStr != null && !cursorCreatedAtStr.isBlank();
+        boolean hasCursorId = cursorId != null;
+        if (!hasCursorCreatedAt && Long.valueOf(0L).equals(cursorId)) {
+            return null;
+        }
+        if (hasCursorCreatedAt != hasCursorId) {
+            throw new IllegalArgumentException("cursorCreatedAt and cursorId must be provided together");
+        }
+        if (!hasCursorCreatedAt) {
+            return null;
+        }
+        try {
+            return new SingleSyncCursor(java.util.Date.from(Instant.parse(cursorCreatedAtStr)), cursorId);
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("cursorCreatedAt must be ISO-8601 instant");
+        }
+    }
     private void handleAckReport(WsCommandContext context) throws Exception {
         JsonNode node = context.payload();
         String serverMsgId = node.path("serverMsgId").asText(null);
@@ -181,104 +245,5 @@ public class ChatCommandHandler implements WsCommandHandler {
                 channel.writeAndFlush(new io.netty.handler.codec.http.websocketx.TextWebSocketFrame(payload));
             }
         }
-    }
-
-    private void handlePullOffline(WsCommandContext context) throws Exception {
-        Long userId = context.userId();
-        if (userId == null) {
-            throw new UnauthorizedWsException("user not bound");
-        }
-        String deviceId = protocolSupport.currentDeviceId(context.channel());
-        JsonNode node = context.payload();
-        int limit = node.has("limit") ? node.get("limit").asInt(nettyProperties.getSyncBatchSize()) : nettyProperties.getSyncBatchSize();
-        int maxLimit = nettyProperties.getOfflinePullMaxLimit() > 0 ? nettyProperties.getOfflinePullMaxLimit() : DEFAULT_PULL_MAX_LIMIT;
-        if (limit < 1 || limit > maxLimit) {
-            throw new IllegalArgumentException("limit must be between 1 and " + maxLimit);
-        }
-        SingleSyncCursor syncCursor = parseSingleSyncCursor(node, deviceId);
-        if (syncCursor == INVALID_SINGLE_SYNC_CURSOR) {
-            return;
-        }
-        SingleMessagePage pageResult = messageFacade.pullOffline(userId, deviceId, syncCursor, limit);
-        ObjectNode resp = protocolSupport.mapper().createObjectNode();
-        resp.put("type", "PULL_OFFLINE_RESULT");
-        resp.put("hasMore", pageResult.hasMore());
-        protocolSupport.writeSingleSyncProgress(resp, deviceId, pageResult.nextCursorCreatedAt(), pageResult.nextCursorId());
-        ArrayNode arr = protocolSupport.mapper().createArrayNode();
-        for (SingleMessageView message : pageResult.messages()) {
-            ObjectNode item = protocolSupport.mapper().createObjectNode();
-            protocolSupport.writeSingleMessageNode(item, message);
-            arr.add(item);
-        }
-        resp.set("messages", arr);
-        context.channel().writeAndFlush(new io.netty.handler.codec.http.websocketx.TextWebSocketFrame(protocolSupport.mapper().writeValueAsString(resp)))
-                .addListener(future -> {
-                    if (future.isSuccess()) {
-                        messageFacade.advanceSyncCursor(userId, deviceId, pageResult);
-                    }
-                });
-    }
-
-    private SingleSyncCursor parseSingleSyncCursor(JsonNode node, String currentDeviceId) {
-        JsonNode syncToken = node.get("syncToken");
-        String cursorCreatedAtStr;
-        Long cursorId;
-        if (syncToken != null && !syncToken.isNull()) {
-            if (!syncToken.isObject()) {
-                throw new IllegalArgumentException("syncToken must be an object");
-            }
-            String chatType = textValue(syncToken.get("chatType"));
-            if (chatType != null && !"SINGLE".equalsIgnoreCase(chatType)) {
-                throw new IllegalArgumentException("syncToken.chatType must be SINGLE");
-            }
-            String tokenDeviceId = textValue(syncToken.get("deviceId"));
-            if (tokenDeviceId != null && currentDeviceId != null && !tokenDeviceId.equals(currentDeviceId)) {
-                throw new IllegalArgumentException("syncToken.deviceId must match current device");
-            }
-            cursorCreatedAtStr = textValue(syncToken.get("cursorCreatedAt"));
-            cursorId = longValue(syncToken.get("cursorId"));
-        } else {
-            cursorCreatedAtStr = textValue(node.get("cursorCreatedAt"));
-            cursorId = longValue(node.get("cursorId"));
-        }
-        boolean hasCursorCreatedAt = cursorCreatedAtStr != null && !cursorCreatedAtStr.isBlank();
-        boolean hasCursorId = cursorId != null;
-        if (!hasCursorCreatedAt && Long.valueOf(0L).equals(cursorId)) {
-            return null;
-        }
-        if (hasCursorCreatedAt != hasCursorId) {
-            throw new IllegalArgumentException("cursorCreatedAt and cursorId must be provided together");
-        }
-        if (!hasCursorCreatedAt) {
-            return null;
-        }
-        try {
-            return new SingleSyncCursor(java.util.Date.from(Instant.parse(cursorCreatedAtStr)), cursorId);
-        } catch (Exception ex) {
-            throw new IllegalArgumentException("cursorCreatedAt must be ISO-8601 instant");
-        }
-    }
-
-    private String textValue(JsonNode node) {
-        if (node == null || node.isNull()) {
-            return null;
-        }
-        String value = node.asText();
-        return value == null || value.isBlank() ? null : value;
-    }
-
-    private Long longValue(JsonNode node) {
-        if (node == null || node.isNull()) {
-            return null;
-        }
-        return node.asLong();
-    }
-
-    private String normalizeClientMsgId(String clientMsgId) {
-        if (clientMsgId == null) {
-            return null;
-        }
-        String trimmed = clientMsgId.trim();
-        return trimmed.isEmpty() ? null : trimmed;
     }
 }

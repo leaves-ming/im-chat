@@ -45,7 +45,7 @@ public class ContactCommandHandler implements WsCommandHandler {
     }
 
     private void handleContactAdd(WsCommandContext context) throws Exception {
-        Long userId = requireUser(context);
+        Long userId = WsCommandHelper.requireUser(context);
         long peerUserId = context.payload().path("peerUserId").asLong(0L);
         if (!isValidContactPeer(userId, peerUserId)) {
             throw new IllegalArgumentException("peerUserId must be greater than 0 and different from self");
@@ -60,7 +60,7 @@ public class ContactCommandHandler implements WsCommandHandler {
     }
 
     private void handleContactRemove(WsCommandContext context) throws Exception {
-        Long userId = requireUser(context);
+        Long userId = WsCommandHelper.requireUser(context);
         long peerUserId = context.payload().path("peerUserId").asLong(0L);
         if (!isValidContactPeer(userId, peerUserId)) {
             throw new IllegalArgumentException("peerUserId must be greater than 0 and different from self");
@@ -75,14 +75,12 @@ public class ContactCommandHandler implements WsCommandHandler {
     }
 
     private void handleContactList(WsCommandContext context) throws Exception {
-        Long userId = requireUser(context);
+        Long userId = WsCommandHelper.requireUser(context);
         JsonNode node = context.payload();
         int defaultLimit = DEFAULT_CONTACT_LIST_LIMIT;
         int maxLimit = nettyProperties.getOfflinePullMaxLimit() > 0 ? nettyProperties.getOfflinePullMaxLimit() : DEFAULT_PULL_MAX_LIMIT;
         int limit = node.has("limit") ? node.path("limit").asInt(defaultLimit) : defaultLimit;
-        if (limit < 1 || limit > maxLimit) {
-            throw new IllegalArgumentException("limit must be between 1 and " + maxLimit);
-        }
+        WsCommandHelper.validateLimit(limit, 1, maxLimit);
         Long cursorPeerUserId = node.has("cursorPeerUserId") && !node.get("cursorPeerUserId").isNull()
                 ? node.get("cursorPeerUserId").asLong()
                 : null;
@@ -101,13 +99,6 @@ public class ContactCommandHandler implements WsCommandHandler {
         }
         protocolSupport.writeContactList(resp, page.items());
         protocolSupport.sendJson(context.channel(), resp);
-    }
-
-    private Long requireUser(WsCommandContext context) {
-        if (context.userId() == null) {
-            throw new UnauthorizedWsException("user not bound");
-        }
-        return context.userId();
     }
 
     private boolean isValidContactPeer(Long ownerUserId, long peerUserId) {

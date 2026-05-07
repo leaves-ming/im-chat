@@ -49,7 +49,7 @@ public class RecallCommandHandler implements WsCommandHandler {
     }
 
     private void handleSingleRecall(WsCommandContext context) throws Exception {
-        Long userId = requireUser(context);
+        Long userId = WsCommandHelper.requireUser(context);
         String serverMsgId = requireServerMsgId(context);
         SingleMessageView recalled = messageFacade.recallMessage(userId, serverMsgId, recallWindowSeconds());
         ObjectNode result = RecallProtocolSupport.buildSingleRecallNode(protocolSupport.mapper(), "MSG_RECALL_RESULT", recalled);
@@ -58,7 +58,7 @@ public class RecallCommandHandler implements WsCommandHandler {
     }
 
     private void handleGroupRecall(WsCommandContext context) throws Exception {
-        Long userId = requireUser(context);
+        Long userId = WsCommandHelper.requireUser(context);
         String serverMsgId = requireServerMsgId(context);
         GroupMessageView recalled = messageFacade.recallGroupMessage(userId, serverMsgId, recallWindowSeconds());
         ObjectNode result = RecallProtocolSupport.buildGroupRecallNode(protocolSupport.mapper(), "GROUP_MSG_RECALL_RESULT", recalled);
@@ -81,13 +81,6 @@ public class RecallCommandHandler implements WsCommandHandler {
         for (Channel channel : channelUserManager.getChannels(message.toUserId())) {
             channel.writeAndFlush(new TextWebSocketFrame(payload));
         }
-    }
-
-    private Long requireUser(WsCommandContext context) {
-        if (context.userId() == null) {
-            throw new UnauthorizedWsException("user not bound");
-        }
-        return context.userId();
     }
 
     private String requireServerMsgId(WsCommandContext context) {

@@ -60,8 +60,8 @@ public class GroupCommandHandler implements WsCommandHandler {
     }
 
     private void handleGroupJoin(WsCommandContext context) throws Exception {
-        Long userId = requireUser(context);
-        long groupId = positiveGroupId(context.payload());
+        Long userId = WsCommandHelper.requireUser(context);
+        long groupId = WsCommandHelper.positiveGroupId(context.payload());
         var result = socialFacade.joinGroup(groupId, userId);
         ObjectNode resp = protocolSupport.mapper().createObjectNode();
         resp.put("type", "GROUP_JOIN_RESULT");
@@ -73,8 +73,8 @@ public class GroupCommandHandler implements WsCommandHandler {
     }
 
     private void handleGroupQuit(WsCommandContext context) throws Exception {
-        Long userId = requireUser(context);
-        long groupId = positiveGroupId(context.payload());
+        Long userId = WsCommandHelper.requireUser(context);
+        long groupId = WsCommandHelper.positiveGroupId(context.payload());
         var result = socialFacade.quitGroup(groupId, userId);
         ObjectNode resp = protocolSupport.mapper().createObjectNode();
         resp.put("type", "GROUP_QUIT_RESULT");
@@ -86,12 +86,10 @@ public class GroupCommandHandler implements WsCommandHandler {
     }
 
     private void handleGroupMemberList(WsCommandContext context) throws Exception {
-        Long userId = requireUser(context);
-        long groupId = positiveGroupId(context.payload());
+        Long userId = WsCommandHelper.requireUser(context);
+        long groupId = WsCommandHelper.positiveGroupId(context.payload());
         int limit = context.payload().has("limit") ? context.payload().path("limit").asInt(50) : 50;
-        if (limit <= 0) {
-            throw new IllegalArgumentException("limit must be greater than 0");
-        }
+        WsCommandHelper.validateLimit(limit, 1, Integer.MAX_VALUE);
         Long cursorUserId = context.payload().has("cursorUserId") && !context.payload().get("cursorUserId").isNull()
                 ? context.payload().get("cursorUserId").asLong()
                 : null;
@@ -111,25 +109,23 @@ public class GroupCommandHandler implements WsCommandHandler {
     }
 
     private void handleGroupChat(WsCommandContext context) throws Exception {
-        Long fromUserId = requireUser(context);
-        long groupId = positiveGroupId(context.payload());
+        Long fromUserId = WsCommandHelper.requireUser(context);
+        long groupId = WsCommandHelper.positiveGroupId(context.payload());
         String msgType = MessageContentCodec.normalizeMsgType(context.payload().path("msgType").asText(null));
         String content = MessageContentCodec.validateAndSerializeIncomingContent(msgType, context.payload().get("content"));
-        String clientMsgId = normalizeClientMsgId(context.payload().path("clientMsgId").asText(null));
+        String clientMsgId = WsCommandHelper.normalizeClientMsgId(context.payload().path("clientMsgId").asText(null));
         GroupMessagePersistResult persistResult = messageFacade.sendGroupChat(groupId, fromUserId, clientMsgId, msgType, content);
         GroupMessageView message = persistResult.message();
         groupPushDispatcher.dispatchGroupPush(groupId, message);
     }
 
     private void handleGroupPullOffline(WsCommandContext context) throws Exception {
-        Long userId = requireUser(context);
-        long groupId = positiveGroupId(context.payload());
+        Long userId = WsCommandHelper.requireUser(context);
+        long groupId = WsCommandHelper.positiveGroupId(context.payload());
         int defaultLimit = nettyProperties.getSyncBatchSize() > 0 ? nettyProperties.getSyncBatchSize() : DEFAULT_GROUP_PULL_LIMIT;
         int limit = context.payload().has("limit") ? context.payload().path("limit").asInt(defaultLimit) : defaultLimit;
         int maxLimit = nettyProperties.getOfflinePullMaxLimit() > 0 ? nettyProperties.getOfflinePullMaxLimit() : DEFAULT_PULL_MAX_LIMIT;
-        if (limit < 1 || limit > maxLimit) {
-            throw new IllegalArgumentException("limit must be between 1 and " + maxLimit);
-        }
+        WsCommandHelper.validateLimit(limit, 1, maxLimit);
         Long cursorSeq = parseGroupCursorSeq(context.payload(), groupId);
         if (Long.valueOf(INVALID_GROUP_CURSOR_SEQ).equals(cursorSeq)) {
             return;
@@ -150,21 +146,6 @@ public class GroupCommandHandler implements WsCommandHandler {
         protocolSupport.sendJson(context.channel(), resp);
     }
 
-    private Long requireUser(WsCommandContext context) {
-        if (context.userId() == null) {
-            throw new UnauthorizedWsException("user not bound");
-        }
-        return context.userId();
-    }
-
-    private long positiveGroupId(JsonNode payload) {
-        long groupId = payload.path("groupId").asLong(0L);
-        if (groupId <= 0) {
-            throw new IllegalArgumentException("groupId must be greater than 0");
-        }
-        return groupId;
-    }
-
     private Long parseGroupCursorSeq(JsonNode node, Long groupId) {
         JsonNode syncToken = node.get("syncToken");
         Long cursorSeq;
@@ -172,44 +153,21 @@ public class GroupCommandHandler implements WsCommandHandler {
             if (!syncToken.isObject()) {
                 throw new IllegalArgumentException("syncToken must be an object");
             }
-            String chatType = textValue(syncToken.get("chatType"));
+            String chatType = WsCommandHelper.textValue(syncToken.get("chatType"));
             if (chatType != null && !"GROUP".equalsIgnoreCase(chatType)) {
                 throw new IllegalArgumentException("syncToken.chatType must be GROUP");
             }
-            Long tokenGroupId = longValue(syncToken.get("groupId"));
+            Long tokenGroupId = WsCommandHelper.longValue(syncToken.get("groupId"));
             if (tokenGroupId != null && !tokenGroupId.equals(groupId)) {
                 throw new IllegalArgumentException("syncToken.groupId must match groupId");
             }
-            cursorSeq = longValue(syncToken.get("cursorSeq"));
+            cursorSeq = WsCommandHelper.longValue(syncToken.get("cursorSeq"));
         } else {
-            cursorSeq = longValue(node.get("cursorSeq"));
+            cursorSeq = WsCommandHelper.longValue(node.get("cursorSeq"));
         }
         if (cursorSeq != null && cursorSeq < 0L) {
             throw new IllegalArgumentException("cursorSeq must be greater than or equal to 0");
         }
         return cursorSeq;
-    }
-
-    private String textValue(JsonNode node) {
-        if (node == null || node.isNull()) {
-            return null;
-        }
-        String value = node.asText();
-        return value == null || value.isBlank() ? null : value;
-    }
-
-    private Long longValue(JsonNode node) {
-        if (node == null || node.isNull()) {
-            return null;
-        }
-        return node.asLong();
-    }
-
-    private String normalizeClientMsgId(String clientMsgId) {
-        if (clientMsgId == null) {
-            return null;
-        }
-        String trimmed = clientMsgId.trim();
-        return trimmed.isEmpty() ? null : trimmed;
     }
 }
