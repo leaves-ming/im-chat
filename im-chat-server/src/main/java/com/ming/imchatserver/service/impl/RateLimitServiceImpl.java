@@ -2,39 +2,23 @@ package com.ming.imchatserver.service.impl;
 
 import com.ming.imchatserver.redis.RedisKeyFactory;
 import com.ming.imchatserver.service.RateLimitService;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.redisson.api.RRateLimiter;
+import org.redisson.api.RateIntervalUnit;
+import org.redisson.api.RateType;
+import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Service;
 
-import java.util.Collections;
-import java.util.List;
-
 /**
- * 固定窗口限流实现，Lua脚本保证incr+expire原子性。
+ * 令牌桶限流实现，Redisson RRateLimiter保证原子性，支持平滑流量控制。
  */
 @Service
 public class RateLimitServiceImpl implements RateLimitService {
 
-    private final StringRedisTemplate stringRedisTemplate;
+    private final RedissonClient redissonClient;
     private final RedisKeyFactory redisKeyFactory;
-    private static final DefaultRedisScript<Long> RATE_LIMIT_SCRIPT;
 
-    static {
-        RATE_LIMIT_SCRIPT = new DefaultRedisScript<>();
-        RATE_LIMIT_SCRIPT.setScriptText("""
-                local key = KEYS[1]
-                local window = tonumber(ARGV[1])
-                local current = redis.call('INCR', key)
-                if current == 1 then
-                    redis.call('EXPIRE', key, window)
-                end
-                return current
-                """);
-        RATE_LIMIT_SCRIPT.setResultType(Long.class);
-    }
-
-    public RateLimitServiceImpl(StringRedisTemplate stringRedisTemplate, RedisKeyFactory redisKeyFactory) {
-        this.stringRedisTemplate = stringRedisTemplate;
+    public RateLimitServiceImpl(RedissonClient redissonClient, RedisKeyFactory redisKeyFactory) {
+        this.redissonClient = redissonClient;
         this.redisKeyFactory = redisKeyFactory;
     }
 
@@ -43,13 +27,21 @@ public class RateLimitServiceImpl implements RateLimitService {
         if (limit <= 0L || windowSeconds <= 0L || subject == null || subject.isBlank()) {
             return new Decision(true, 0L, limit);
         }
-        long now = System.currentTimeMillis() / 1000L;
-        long windowStart = now - (now % windowSeconds);
-        String key = redisKeyFactory.rateLimit(scope, dimension, subject, windowStart);
-        List<String> keys = Collections.singletonList(key);
-        Long current = stringRedisTemplate.execute(RATE_LIMIT_SCRIPT, keys, String.valueOf(windowSeconds));
-        long count = current == null ? 0L : current;
-        return new Decision(count <= limit, count, limit);
+        // 限流key不带时间窗口后缀，Redisson内部自动维护过期
+        String key = redisKeyFactory.rateLimit(scope, dimension, subject);
+        RRateLimiter rateLimiter = redissonClient.getRateLimiter(key);
+        
+        // 幂等初始化限流器，已存在则不会覆盖配置
+        rateLimiter.trySetRate(RateType.OVERALL, limit, windowSeconds, RateIntervalUnit.SECONDS);
+        
+        // 尝试获取1个令牌
+        boolean allowed = rateLimiter.tryAcquire(1);
+        // 剩余可用令牌数
+        long availablePermits = rateLimiter.availablePermits();
+        // 已使用令牌数 = 总配额 - 剩余
+        long currentCount = limit - availablePermits;
+        
+        return new Decision(allowed, currentCount, limit);
     }
 }
 

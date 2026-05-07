@@ -1,13 +1,16 @@
 package com.ming.imchatserver.netty;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ming.imchatserver.application.facade.MessageFacade;
 import com.ming.imchatserver.application.facade.SocialFacade;
 import com.ming.imchatserver.config.InstanceProperties;
 import com.ming.imchatserver.config.NettyProperties;
 import com.ming.imchatserver.config.RateLimitProperties;
+import com.ming.imchatserver.mapper.OutboxMapper;
 import com.ming.imchatserver.metrics.MetricsService;
 import com.ming.imchatserver.observability.RuntimeObservabilitySettings;
 import com.ming.imchatserver.service.AuthService;
+import com.ming.imchatserver.service.IdempotencyService;
 import com.ming.imchatserver.service.RateLimitService;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
@@ -19,11 +22,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.boot.health.actuate.endpoint.HealthEndpoint;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
-import org.springframework.boot.health.actuate.endpoint.HealthEndpoint;
 
 import java.net.InetSocketAddress;
 import java.util.concurrent.Executor;
@@ -51,6 +54,9 @@ public class NettyWebSocketServer {
     private final Executor wsBusinessExecutor;
     private final GroupPushDispatcher groupPushDispatcher;
     private final MessageFacade messageFacade;
+    private final IdempotencyService idempotencyService;
+    private final OutboxMapper outboxMapper;
+    private final ObjectMapper objectMapper;
 
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
@@ -76,7 +82,10 @@ public class NettyWebSocketServer {
                                 InstanceProperties instanceProperties,
                                 GroupPushDispatcher groupPushDispatcher,
                                 MessageFacade messageFacade,
-                                @Qualifier("imWsBusinessExecutor") Executor wsBusinessExecutor) {
+                                @Qualifier("imWsBusinessExecutor") Executor wsBusinessExecutor,
+                                IdempotencyService idempotencyService,
+                                OutboxMapper outboxMapper,
+                                ObjectMapper objectMapper) {
         this.properties = properties;
         this.authService = authService;
         this.channelUserManager = channelUserManager;
@@ -90,6 +99,9 @@ public class NettyWebSocketServer {
         this.groupPushDispatcher = groupPushDispatcher;
         this.messageFacade = messageFacade;
         this.wsBusinessExecutor = wsBusinessExecutor;
+        this.idempotencyService = idempotencyService;
+        this.outboxMapper = outboxMapper;
+        this.objectMapper = objectMapper;
     }
 
     @EventListener(ApplicationReadyEvent.class)    /**
@@ -111,7 +123,10 @@ public class NettyWebSocketServer {
                         runtimeObservabilitySettings, healthEndpoint, instanceProperties,
                         groupPushDispatcher,
                         messageFacade,
-                        wsBusinessExecutor));
+                        wsBusinessExecutor,
+                        idempotencyService,
+                        outboxMapper,
+                        objectMapper));
         serverChannel = b.bind().sync().channel();
         logger.info("Netty server started and listening on {}", properties.getPort());
     }

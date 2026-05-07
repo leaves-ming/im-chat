@@ -28,6 +28,13 @@ public class RedisKeyFactory {
     public String rateLimit(String scope, String dimension, String subject, long windowStart) {
         return RedisPrefixes.RATE_LIMIT + scope + ":" + dimension + ":" + subject + ":" + windowStart;
     }
+    
+    /**
+     * 令牌桶限流key，不带时间窗口后缀（Redisson内部自动维护过期）
+     */
+    public String rateLimit(String scope, String dimension, String subject) {
+        return RedisPrefixes.RATE_LIMIT + scope + ":" + dimension + ":" + subject;
+    }
 
     public String coordinationLock(String scope, String resourceId) {
         return RedisPrefixes.COORD + "lock:" + scope + ":" + resourceId;
