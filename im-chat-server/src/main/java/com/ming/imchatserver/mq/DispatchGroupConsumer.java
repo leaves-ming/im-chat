@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 @Component
 @RocketMQMessageListener(
         topic = "${im.reliability.dispatch-topic:im.msg.dispatch}",
-        consumerGroup = "${rocketmq.consumer.group:im-chat-consumer-group}",
+        consumerGroup = "${rocketmq.consumer.group-for-group-chat:im-chat-group-consumer-group}",
         selectorExpression = "GROUP",
         messageModel = MessageModel.BROADCASTING
 )
