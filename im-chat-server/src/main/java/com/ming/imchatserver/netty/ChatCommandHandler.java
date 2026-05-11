@@ -92,6 +92,8 @@ public class ChatCommandHandler implements WsCommandHandler {
         outbox.setEventId(UUID.randomUUID().toString().replace("-", ""));
         outbox.setClientMsgId(clientMsgId);
         outbox.setFromUserId(fromUserId);
+        outbox.setTopic("im.msg.dispatch");
+        outbox.setTag("SINGLE");
         outbox.setPayload(objectMapper.writeValueAsString(context.payload()));
         outbox.setStatus(0); // PENDING
         outbox.setAckStatus(0); // 未确认
