@@ -128,7 +128,9 @@ public class WebSocketFrameHandler extends SimpleChannelInboundHandler<WebSocket
             return;
         }
         if (frame instanceof CloseWebSocketFrame) {
-            ctx.close();
+            ctx.writeAndFlush(new CloseWebSocketFrame())
+                    .addListener(f -> ctx.close());
+            return;
         }
     }
 
