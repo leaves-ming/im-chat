@@ -20,6 +20,11 @@ public class GatewayHttpClientConfig {
     }
 
     @Bean
+    public WebClient plainWebClient(WebClient.Builder builder) {
+        return builder.build();
+    }
+
+    @Bean
     public WebClient gatewayWebClient(WebClient.Builder builder,
                                       ObjectProvider<ReactorLoadBalancerExchangeFilterFunction> lbFunctionProvider) {
         WebClient.Builder targetBuilder = builder.clone();

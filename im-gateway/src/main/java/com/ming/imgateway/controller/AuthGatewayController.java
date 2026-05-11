@@ -19,18 +19,20 @@ import reactor.core.publisher.Mono;
 @RestController
 public class AuthGatewayController {
 
-    private final WebClient webClient;
+    private final WebClient plainWebClient;
+    private final WebClient gatewayWebClient;
     private final GatewayAccessProperties properties;
 
-    public AuthGatewayController(WebClient gatewayWebClient, GatewayAccessProperties properties) {
-        this.webClient = gatewayWebClient;
+    public AuthGatewayController(WebClient plainWebClient, WebClient gatewayWebClient, GatewayAccessProperties properties) {
+        this.plainWebClient = plainWebClient;
+        this.gatewayWebClient = gatewayWebClient;
         this.properties = properties;
     }
 
     @PostMapping(path = "/api/auth/login", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Mono<ResponseEntity<String>> login(@RequestBody String body, ServerWebExchange exchange) {
-        return webClient.post()
-                .uri("http://im-user-service/api/auth/login")
+        return gatewayWebClient.post()
+                .uri("lb://im-user-service/api/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)
                 .headers(headers -> copyForwardHeaders(exchange, headers))
                 .body(BodyInserters.fromValue(body))
