@@ -34,7 +34,9 @@ class WebSocketHandshakeAuthHandlerTest {
 
         EmbeddedChannel channel = new EmbeddedChannel(
                 new WebSocketHandshakeAuthHandler(properties, authService, mock(ChannelUserManager.class),
-                        new RuntimeObservabilitySettings(new ObservabilityProperties()))
+                        new RuntimeObservabilitySettings(new ObservabilityProperties()),
+                        mapper
+                )
         );
         DefaultFullHttpRequest request = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/ws");
         request.headers().set(HttpHeaderNames.AUTHORIZATION, "Bearer token-1");
@@ -60,7 +62,9 @@ class WebSocketHandshakeAuthHandlerTest {
 
         EmbeddedChannel channel = new EmbeddedChannel(
                 new WebSocketHandshakeAuthHandler(properties, authService, mock(ChannelUserManager.class),
-                        new RuntimeObservabilitySettings(new ObservabilityProperties()))
+                        new RuntimeObservabilitySettings(new ObservabilityProperties()),
+                        mapper
+                )
         );
         DefaultFullHttpRequest request = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/ws-internal?token=token-1");
         request.headers().set(properties.getTrustedGatewayHeaderName(), properties.getTrustedGatewayHeaderValue());
@@ -85,7 +89,9 @@ class WebSocketHandshakeAuthHandlerTest {
 
         EmbeddedChannel channel = new EmbeddedChannel(
                 new WebSocketHandshakeAuthHandler(properties, authService, mock(ChannelUserManager.class),
-                        new RuntimeObservabilitySettings(new ObservabilityProperties()))
+                        new RuntimeObservabilitySettings(new ObservabilityProperties()),
+                        mapper
+                )
         );
         DefaultFullHttpRequest request = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/ws-internal?token=token-1");
 

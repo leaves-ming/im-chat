@@ -64,9 +64,9 @@ spring:
   datasource:
     type: com.alibaba.druid.pool.DruidDataSource
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: ${IM_DB_URL:jdbc:mysql://127.0.0.1:3306/im_chat?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai}
+    url: ${IM_DB_URL:jdbc:mysql://0.0.0.0:3306/im?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai}
     username: ${IM_DB_USERNAME:root}
-    password: ${IM_DB_PASSWORD:root}
+    password: ${IM_DB_PASSWORD:123456}
     druid:
       initial-size: ${IM_DB_POOL_INITIAL_SIZE:5}
       min-idle: ${IM_DB_POOL_MIN_IDLE:5}
@@ -78,9 +78,9 @@ spring:
       test-on-return: false
   data:
     redis:
-      host: ${IM_REDIS_HOST:127.0.0.1}
+      host: ${IM_REDIS_HOST:localhost}
       port: ${IM_REDIS_PORT:6379}
-      password: ${IM_REDIS_PASSWORD:}
+      password: ${IM_REDIS_PASSWORD:123456}
       database: ${IM_REDIS_DATABASE:0}
       timeout: 3000ms
       lettuce:
@@ -117,16 +117,17 @@ mybatis:
     cache-enabled: false
 
 rocketmq:
-  name-server: ${IM_ROCKETMQ_NAME_SERVER:127.0.0.1:9876}
+  name-server: ${IM_ROCKETMQ_NAME_SERVER:localhost:9876}
   producer:
     group: ${IM_ROCKETMQ_PRODUCER_GROUP:im-chat-producer-group}
   consumer:
     group: ${IM_ROCKETMQ_CONSUMER_GROUP:im-chat-consumer-group}
+    group-for-group-chat: ${IM_ROCKETMQ_CONSUMER_GROUP_FOR_GROUP:im-chat-group-consumer-group}
 
 redisson:
   single-server-config:
-    address: ${IM_REDISSON_ADDRESS:redis://127.0.0.1:6379}
-    password: ${IM_REDISSON_PASSWORD:}
+    address: ${IM_REDISSON_ADDRESS:redis://localhost:6379}
+    password: ${IM_REDISSON_PASSWORD:123456}
 
 logging:
   pattern:

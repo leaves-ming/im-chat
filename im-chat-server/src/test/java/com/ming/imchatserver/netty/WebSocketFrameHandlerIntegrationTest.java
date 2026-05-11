@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ming.imchatserver.application.facade.MessageFacade;
 import com.ming.imchatserver.application.facade.SocialFacade;
+import com.ming.imchatserver.mapper.OutboxMapper;
+import com.ming.imchatserver.service.IdempotencyService;
 import com.ming.imchatserver.application.model.ContactOperationResult;
 import com.ming.imchatserver.application.model.ContactPage;
 import com.ming.imchatserver.application.model.ContactView;
@@ -139,15 +141,21 @@ class WebSocketFrameHandlerIntegrationTest {
                     groupPushExecutor,
                     groupPushCoordinator,
                     metricsService,
-                    nettyProperties
+                    nettyProperties,
+                    mapper
             );
+            IdempotencyService idempotencyService = mock(IdempotencyService.class);
+            OutboxMapper outboxMapper = mock(OutboxMapper.class);
             return new WebSocketFrameHandler(
                     channelUserManager,
                     socialFacade,
                     nettyProperties,
                     groupPushDispatcher,
                     messageFacade,
-                    businessExecutor
+                    businessExecutor,
+                    idempotencyService,
+                    outboxMapper,
+                    mapper
             );
         }
     }

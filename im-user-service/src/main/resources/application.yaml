@@ -42,14 +42,14 @@ spring:
   datasource:
     type: com.alibaba.druid.pool.DruidDataSource
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: ${IM_DB_URL:jdbc:mysql://127.0.0.1:3306/im_chat?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai}
+    url: ${IM_DB_URL:jdbc:mysql://0.0.0.0:3306/im_chat?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai}
     username: ${IM_DB_USERNAME:root}
-    password: ${IM_DB_PASSWORD:root}
+    password: ${IM_DB_PASSWORD:123456}
   data:
     redis:
       host: ${IM_REDIS_HOST:127.0.0.1}
       port: ${IM_REDIS_PORT:6379}
-      password: ${IM_REDIS_PASSWORD:}
+      password: ${IM_REDIS_PASSWORD:123456}
       database: ${IM_REDIS_DATABASE:0}
       timeout: 3000ms
 
