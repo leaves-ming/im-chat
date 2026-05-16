@@ -2,6 +2,7 @@ package com.ming.imchatserver.netty;
 
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
 import io.netty.handler.timeout.IdleState;
 import io.netty.handler.timeout.IdleStateEvent;
 import org.slf4j.Logger;
@@ -36,12 +37,12 @@ import org.slf4j.LoggerFactory;
                 Long userId = ctx.channel().attr(NettyAttr.USER_ID).get();
                 logger.info("reader idle, closing channel {} userId={}", ctx.channel().id(), userId);
                 channelUserManager.unbindByChannel(ctx.channel());
-                ctx.close();
+                ctx.writeAndFlush(new CloseWebSocketFrame()).addListener(f -> ctx.close());
             } else if (e.state() == IdleState.ALL_IDLE) {
                 Long userId = ctx.channel().attr(NettyAttr.USER_ID).get();
                 logger.info("all idle, closing channel {} userId={}", ctx.channel().id(), userId);
                 channelUserManager.unbindByChannel(ctx.channel());
-                ctx.close();
+                ctx.writeAndFlush(new CloseWebSocketFrame()).addListener(f -> ctx.close());
             }
         } else {
             super.userEventTriggered(ctx, evt);
